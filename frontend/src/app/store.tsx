@@ -125,13 +125,76 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const sessionIdRef = useRef(activeSessionId);
   useEffect(() => { sessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
-  // persist
+  // persist в localStorage как быстрый кеш — при следующем открытии сразу видны,
+  // пока загружаются с сервера.
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions)); } catch {}
   }, [sessions]);
   useEffect(() => {
     try { localStorage.setItem(ACTIVE_KEY, activeSessionId); } catch {}
   }, [activeSessionId]);
+
+  // Первичная загрузка — тянем список сессий с сервера (синхронизация между
+  // устройствами). Затем подгружаем сообщения активной сессии.
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/sessions');
+        if (!r.ok) return;
+        const serverSessions: any[] = await r.json();
+        if (!Array.isArray(serverSessions) || serverSessions.length === 0) return;
+
+        // Сервер отдал summary — нам нужен список с пустыми messages/tenders,
+        // которые подтянутся по клику. Конвертируем.
+        const summaries: ChatSession[] = serverSessions.map(s => ({
+          id: s.id,
+          title: s.title || 'Новый поиск',
+          messages: [],
+          tenders: [],
+          createdAt: s.created_at || new Date().toISOString(),
+        }));
+
+        // Подтягиваем полный контент активной сессии
+        const activeId = sessionIdRef.current;
+        if (summaries.some(s => s.id === activeId)) {
+          try {
+            const r2 = await fetch(`/api/sessions/${activeId}`);
+            if (r2.ok) {
+              const full = await r2.json();
+              const msgs: Message[] = (full.messages || []).map((m: any) => ({
+                id: String(m.id),
+                role: m.role === 'user' ? 'user' : 'agent',
+                content: m.content || '',
+                timestamp: m.timestamp || new Date().toISOString(),
+              }));
+              const tenders: Tender[] = (full.tenders || []).map(mapTender);
+              const idx = summaries.findIndex(s => s.id === activeId);
+              if (idx >= 0) summaries[idx] = { ...summaries[idx], messages: msgs, tenders };
+            }
+          } catch {}
+        }
+
+        // Merge: серверные сессии имеют приоритет по id, локальные идентичные обновляем
+        setSessions(prev => {
+          const byId = new Map<string, ChatSession>();
+          summaries.forEach(s => byId.set(s.id, s));
+          // если у локальной сессии уже есть свежие messages/tenders (активная) — не теряем
+          prev.forEach(p => {
+            if (byId.has(p.id)) {
+              const server = byId.get(p.id)!;
+              // если сервер не подтянул содержимое (summary) — оставляем локальное
+              if (server.messages.length === 0 && p.messages.length > 0) {
+                byId.set(p.id, { ...server, messages: p.messages, tenders: p.tenders });
+              }
+            }
+          });
+          return Array.from(byId.values());
+        });
+      } catch (e) {
+        console.warn('[sessions] server sync failed', e);
+      }
+    })();
+  }, []);
 
   const pushToast = useCallback((toast: Omit<Toast, 'id' | 'createdAt'>) => {
     const t: Toast = { ...toast, id: `t-${Date.now()}-${Math.random()}`, createdAt: Date.now() };
@@ -288,13 +351,35 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setStatusText('');
   }, []);
 
-  const selectSession = useCallback((id: string) => {
+  const selectSession = useCallback(async (id: string) => {
     setActiveSessionId(id);
     setIsSearching(false);
     setStatusText('');
+    // Подтянуть полный контент с сервера (если был переход на не-активную сессию)
+    try {
+      const r = await fetch(`/api/sessions/${id}`);
+      if (r.ok) {
+        const full = await r.json();
+        const msgs: Message[] = (full.messages || []).map((m: any) => ({
+          id: String(m.id),
+          role: m.role === 'user' ? 'user' : 'agent',
+          content: m.content || '',
+          timestamp: m.timestamp || new Date().toISOString(),
+        }));
+        const tenders: Tender[] = (full.tenders || []).map(mapTender);
+        setSessions(prev => prev.map(s =>
+          s.id === id ? { ...s, title: full.title || s.title, messages: msgs, tenders } : s
+        ));
+      }
+    } catch (e) {
+      console.warn('[session] load failed', e);
+    }
   }, []);
 
   const deleteSession = useCallback((id: string) => {
+    // Удаляем на сервере (fire-and-forget)
+    fetch(`/api/sessions/${id}`, { method: 'DELETE' }).catch(() => {});
+
     setSessions(prev => {
       const filtered = prev.filter(s => s.id !== id);
       if (id === activeSessionId) {

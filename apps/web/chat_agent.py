@@ -263,6 +263,41 @@ class ChatAgent:
 
         return {"text": raw.strip()}
 
+    def respond_during_search(self, user_msg: str) -> dict:
+        """Ответ пользователю пока поиск тендеров идёт в фоне.
+
+        LLM видит контекст: «ты уже запустил поиск по таким-то ключевым словам,
+        он идёт в фоне». Не инициирует новый поиск, отвечает коротко по теме
+        (статус, вопросы о тендерах, болтовня).
+        """
+        from core import llm as _llm
+
+        last_search = self.session.search_params or {}
+        kws = last_search.get("keywords", [])
+
+        history_text = ""
+        for msg in self.session.history[-6:]:
+            role = "Пользователь" if msg["role"] == "user" else "Ассистент"
+            history_text += f"{role}: {msg['content']}\n\n"
+
+        prompt = (
+            "Ты — ИИ-ассистент для поиска тендеров. Прямо сейчас в фоне идёт "
+            "поиск тендеров по ключевым словам: "
+            f"{', '.join(kws) if kws else '(неизвестно)'}.\n\n"
+            "Пользователь задал вопрос пока поиск не закончился. Ответь коротко "
+            "и по делу — не запускай новый поиск. Если спрашивает о статусе — "
+            "скажи что поиск ещё идёт и результаты скоро будут. На другие "
+            "вопросы отвечай обычным образом, но тоже коротко (1-3 предложения).\n\n"
+            "НЕ используй блок ```search``` в ответе — он уже работает.\n\n"
+            f"=== ИСТОРИЯ ДИАЛОГА ===\n{history_text}\n"
+            f"Ответь пользователю кратко."
+        )
+
+        raw = _llm.call_text(prompt, timeout=30, max_tokens=300)
+        if not raw:
+            return {"text": "Подождите, поиск ещё идёт. Результаты появятся через минуту."}
+        return {"text": raw.strip()}
+
     def execute_search(
         self,
         params: dict,
