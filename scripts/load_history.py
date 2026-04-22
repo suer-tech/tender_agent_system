@@ -121,9 +121,24 @@ def cmd_fetch(args):
         eis_pipeline.run_phase2(workers=args.workers_phase2)
 
     s = eis_history.stats()
-    print("\n=== итого ===")
+    print("\n=== eis_history.db ===")
     for k, v in s.items():
         print(f"  {k}: {v}")
+
+    # Автоматический парсинг + пересчёт bench_cache — чтобы аналитика в UI
+    # сразу увидела новые данные.
+    if args.auto_parse:
+        print("\n[auto-parse] парсю архивы в eis_analytics.db...")
+        eis_analytics_loader.run_parse()
+        print("\n=== eis_analytics.db ===")
+        for k, v in eis_analytics.stats().items():
+            print(f"  {k}: {v}")
+
+        print("\n[auto-parse] пересчитываю bench_cache (может занять 20-30 мин)...")
+        from core.analytics.cache import refresh_bench_cache
+        r = refresh_bench_cache()
+        print(f"[auto-parse] bench_cache: {r['rows_written']} строк из {r['combos_checked']} комбинаций")
+
     return 0
 
 
@@ -169,7 +184,10 @@ def main():
 
     pf = sub.add_parser("fetch", help="Массовая выгрузка по пресету (резюмируемая)")
     pf.add_argument("--preset", required=True,
-                    help="top10-apr2026 | smoke")
+                    help="top10-jan2026 | top10-feb2026 | top10-mar2026 | "
+                         "top10-apr2026-full | top10-may2026 | top10-jun2026 | "
+                         "top10-q1-2026 | top10-q2-2026 | top10-h1-2026 | "
+                         "top10-apr2026 (legacy 1-20 apr) | smoke")
     pf.add_argument("--fz", default="44")
     pf.add_argument("--workers-phase1", dest="workers_phase1", type=int, default=20,
                     help="параллелизм SOAP. Лимит ДИС 90/60 всё равно общий.")
@@ -177,6 +195,8 @@ def main():
                     help="параллелизм скачивания архивов.")
     pf.add_argument("--phase1-only", action="store_true")
     pf.add_argument("--phase2-only", action="store_true")
+    pf.add_argument("--auto-parse", action="store_true",
+                    help="После скачивания запустить parse + refresh_bench_cache (всё готово к аналитике)")
     pf.add_argument("--skip-vpn", action="store_true",
                     help="НЕ управлять VPN (VPS в РФ — нечего переключать).")
     pf.set_defaults(func=cmd_fetch)

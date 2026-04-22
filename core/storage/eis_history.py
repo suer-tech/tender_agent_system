@@ -230,20 +230,59 @@ SUBSYSTEM_TYPES_44 = {
 }
 
 
+def _month_range(year: int, month: int) -> list[str]:
+    """Список ISO-дат за весь месяц (правильное число дней включая 28/29/30/31)."""
+    from datetime import date, timedelta
+    d = date(year, month, 1)
+    out: list[str] = []
+    while d.month == month:
+        out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
+# Пресеты периодов. Ключ → (год, список месяцев).
+# При добавлении новых периодов — только дописать сюда, код ниже подхватит.
+_MONTH_PRESETS: dict[str, tuple[int, list[int]]] = {
+    "top10-jan2026": (2026, [1]),
+    "top10-feb2026": (2026, [2]),
+    "top10-mar2026": (2026, [3]),
+    "top10-apr2026-full": (2026, [4]),     # полный апрель (30 дней) — замена старого top10-apr2026
+    "top10-may2026": (2026, [5]),
+    "top10-jun2026": (2026, [6]),
+    "top10-q1-2026": (2026, [1, 2, 3]),
+    "top10-q2-2026": (2026, [4, 5, 6]),
+    "top10-h1-2026": (2026, [1, 2, 3, 4, 5, 6]),
+}
+
+
 def preset_jobs(preset: str) -> tuple[list[str], list[tuple[str, str]], list[str]]:
     """Вернуть (regions, [(subsystem, doc_type)], dates) по имени пресета."""
     from datetime import date, timedelta
+
+    # Легаси — апрель 1-20 (как было у нас изначально скачано)
     if preset == "top10-apr2026":
         regions = TOP10_REGIONS
         pairs = [(s, t) for s, types in SUBSYSTEM_TYPES_44.items() for t in types]
         dates = [(date(2026, 4, 1) + timedelta(days=i)).isoformat() for i in range(20)]
         return regions, pairs, dates
+
+    # Месячные + квартальные пресеты
+    if preset in _MONTH_PRESETS:
+        year, months = _MONTH_PRESETS[preset]
+        regions = TOP10_REGIONS
+        pairs = [(s, t) for s, types in SUBSYSTEM_TYPES_44.items() for t in types]
+        dates = [d for m in months for d in _month_range(year, m)]
+        return regions, pairs, dates
+
     if preset == "smoke":
         regions = ["77"]
         pairs = [("PRIZ", "epNotificationEF2020"), ("RGK", "contract")]
         dates = [(date.today() - timedelta(days=i)).isoformat() for i in (2, 3)]
         return regions, pairs, dates
-    raise ValueError(f"Неизвестный пресет: {preset}. Доступно: top10-apr2026, smoke")
+
+    available = ["top10-apr2026", "smoke"] + list(_MONTH_PRESETS.keys())
+    raise ValueError(f"Неизвестный пресет: {preset}. Доступно: {', '.join(available)}")
 
 
 def plan_batches(regions: list[str], pairs: list[tuple[str, str]], dates: list[str],
