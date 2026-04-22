@@ -1,0 +1,22 @@
+[Unit]
+Description=EIS DIS analytics fetch (top10-apr2026)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/tender
+EnvironmentFile=/root/tender/.env
+ExecStart=/root/tender/.venv/bin/python /root/tender/scripts/load_history.py fetch \
+    --preset top10-apr2026 \
+    --workers-phase1 20 \
+    --workers-phase2 5 \
+    --skip-vpn
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/var/log/eis-fetch.log
+StandardError=append:/var/log/eis-fetch.log
+
+[Install]
+WantedBy=multi-user.target

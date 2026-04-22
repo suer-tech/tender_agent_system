@@ -1,0 +1,15 @@
+python-telegram-bot==21.6
+playwright==1.48.0
+python-dotenv==1.0.1
+PyYAML==6.0.2
+pdfplumber==0.11.4
+python-docx==1.1.2
+openpyxl==3.1.5
+xlrd==2.0.1
+olefile==0.47
+striprtf==0.0.26
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+zeep==4.3.2
+lxml==5.3.0
+requests==2.32.3

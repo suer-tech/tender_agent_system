@@ -1,0 +1,19 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+
+# базы данных (runtime)
+tenders.db
+eis_history.db
+eis_analytics.db
+
+# сырые данные и state (runtime)
+archives/
+data/
+diag/
+fetch.log
+
+# frontend build artefacts (исходник в frontend/src, собирается через frontend/build.sh)
+frontend/node_modules/
+frontend/dist/

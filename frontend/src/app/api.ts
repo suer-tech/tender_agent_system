@@ -1,0 +1,147 @@
+// Клиент для /api/* эндпоинтов.
+
+export interface BenchData {
+  source: 'cache' | 'live';
+  okpd2_prefix: string;
+  region_code: string;
+  period_months?: number;
+  sample_size: number;
+  nmck_median: number | null;
+  nmck_p25?: number | null;
+  nmck_p75?: number | null;
+  final_price_median: number | null;
+  discount_pct_median: number | null;
+  discount_pct_p25: number | null;
+  discount_pct_p75: number | null;
+  contracts_with_discount: number;
+}
+
+export interface RiskData {
+  inn: string;
+  name?: string;
+  enough_data: boolean;
+  as_customer: {
+    contracts_total: number;
+    contracts_sum_rub: number;
+    notices_count: number;
+    complaints_count: number;
+    unilateral_refusals_count: number;
+  };
+  as_supplier: {
+    contracts_total: number;
+    contracts_sum_rub: number;
+    unilateral_refusals_against: number;
+    complaints_as_applicant: number;
+    in_rnp: boolean;
+    rnp_records: any[];
+  };
+  risk_flags: string[];
+  risk_score: number;
+}
+
+export interface MarketOverview {
+  contracts_count: number;
+  total_sum_rub: number;
+  avg_price_rub: number | null;
+  unique_customers: number;
+  unique_suppliers: number;
+  discount_pct_median: number | null;
+  discount_pct_p25: number | null;
+  discount_pct_p75: number | null;
+  discounts_sample: number;
+  hhi: number | null;
+}
+
+export interface TopEntry {
+  prefix?: string;
+  inn?: string;
+  name?: string;
+  contracts: number;
+  total_sum: number;
+}
+
+export interface TimeSeriesEntry {
+  month: string;
+  contracts: number;
+  total_sum: number;
+}
+
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url} → ${r.status}`);
+  return r.json() as Promise<T>;
+}
+
+function q(params: Record<string, any>): string {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '');
+  return entries.length ? '?' + entries.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&') : '';
+}
+
+export const api = {
+  bench: (okpd2: string, region?: string, months = 12) =>
+    fetchJson<BenchData>(`/api/bench${q({ okpd2, region, months })}`),
+
+  risk: (inn: string) =>
+    fetchJson<RiskData>(`/api/risk${q({ inn })}`),
+
+  marketOverview: (params: { from_date: string; to_date: string; okpd2?: string; region?: string }) =>
+    fetchJson<MarketOverview>(`/api/market/overview${q(params)}`),
+
+  topSectors: (params: { from_date: string; to_date: string; region?: string; limit?: number }) =>
+    fetchJson<TopEntry[]>(`/api/market/top-sectors${q(params)}`),
+
+  topCustomers: (params: { from_date: string; to_date: string; okpd2?: string; region?: string; limit?: number }) =>
+    fetchJson<TopEntry[]>(`/api/market/top-customers${q(params)}`),
+
+  topSuppliers: (params: { from_date: string; to_date: string; okpd2?: string; region?: string; limit?: number }) =>
+    fetchJson<TopEntry[]>(`/api/market/top-suppliers${q(params)}`),
+
+  timeseries: (params: { from_date: string; to_date: string; okpd2?: string; region?: string }) =>
+    fetchJson<TimeSeriesEntry[]>(`/api/market/timeseries${q(params)}`),
+
+  classifyOkpd2: async (title: string, description = '') => {
+    const r = await fetch('/api/classify-okpd2', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description }),
+    });
+    return r.json();
+  },
+};
+
+
+// Справочники для фильтров
+export const REGIONS = [
+  { code: '', name: 'Вся РФ' },
+  { code: '77', name: 'Москва' },
+  { code: '78', name: 'Санкт-Петербург' },
+  { code: '50', name: 'Московская область' },
+  { code: '16', name: 'Татарстан' },
+  { code: '66', name: 'Свердловская' },
+  { code: '23', name: 'Краснодарский' },
+  { code: '54', name: 'Новосибирская' },
+  { code: '61', name: 'Ростовская' },
+  { code: '52', name: 'Нижегородская' },
+  { code: '74', name: 'Челябинская' },
+];
+
+export const OKPD2_TOP = [
+  { code: '', name: 'Все отрасли' },
+  { code: '21', name: '21 — Фармацевтика' },
+  { code: '26', name: '26 — IT / электроника' },
+  { code: '33', name: '33 — Ремонт и монтаж' },
+  { code: '35', name: '35 — Электричество / тепло' },
+  { code: '41', name: '41 — Здания и сооружения' },
+  { code: '42', name: '42 — Гражданское строительство' },
+  { code: '43', name: '43 — Спец. строительные работы' },
+  { code: '46', name: '46 — Оптовая торговля' },
+  { code: '47', name: '47 — Розничная торговля' },
+  { code: '58', name: '58 — Издательство' },
+  { code: '62', name: '62 — IT-услуги' },
+  { code: '71', name: '71 — Архитектура / проектирование' },
+  { code: '80', name: '80 — Охрана' },
+  { code: '81', name: '81 — Хозяйственные услуги' },
+  { code: '85', name: '85 — Образование' },
+  { code: '86', name: '86 — Медицина' },
+];

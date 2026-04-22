@@ -1,0 +1,20 @@
+[Unit]
+Description=TenderAI web UI (FastAPI + uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/tender
+EnvironmentFile=/root/tender/.env
+ExecStart=/root/tender/.venv/bin/python -m uvicorn apps.web.app:app \
+    --host 127.0.0.1 --port 8765 \
+    --workers 2 --proxy-headers --forwarded-allow-ips='*'
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/tenderai-web.log
+StandardError=append:/var/log/tenderai-web.log
+
+[Install]
+WantedBy=multi-user.target
