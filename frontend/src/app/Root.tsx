@@ -15,8 +15,10 @@ export const Root: React.FC = () => {
     sendMessage, newChat, selectSession, deleteSession, discussTender,
   } = useAppState();
 
-  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
-  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
+  // На мобильных (ширина < 768px, Tailwind md) левую панель скрываем по умолчанию.
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(!isMobile);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(!isMobile);
 
   const hasTenders = !!(activeSession && activeSession.tenders.length > 0);
 

@@ -4,6 +4,12 @@ __pycache__/
 .venv/
 .claude/
 
+# SSH / TLS ключи — никогда в репо
+id_rsa
+id_rsa.pub
+*.pem
+*.key
+
 # базы данных (runtime)
 tenders.db
 eis_history.db

@@ -86,7 +86,7 @@ export const ChatUI: React.FC<ChatUIProps> = ({ messages, onSendMessage, isSearc
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="Опишите, какие тендеры вас интересуют..."
+              placeholder="Какие тендеры ищете…"
               rows={1}
               className="w-full bg-slate-100 dark:bg-slate-800/80 text-slate-800 dark:text-slate-100 rounded-2xl py-4 pl-5 pr-14 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:bg-white dark:focus:bg-slate-800 transition-all placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none text-base leading-normal"
               disabled={isSearching}
@@ -99,6 +99,10 @@ export const ChatUI: React.FC<ChatUIProps> = ({ messages, onSendMessage, isSearc
               <Send className="w-4 h-4" />
             </button>
           </form>
+          {/* Подсказка под полем — только на мобильных, где placeholder длинный не влезает */}
+          <p className="sm:hidden mt-3 text-sm text-slate-500 dark:text-slate-400 text-center">
+            Опишите, какие тендеры вас интересуют
+          </p>
         </div>
 
         {/* Spacer + hint at the bottom */}
