@@ -284,6 +284,63 @@ export const SectorItemsCardSkeleton: React.FC<{ rows?: number }> = ({ rows = 6 
   </div>
 );
 
+/** Скелетон для CustomerCard — повторяет 5 KPI плиток + риск-плашки +
+ *  два блока (динамика + топ-исполнители) + таблицу контрактов. */
+export const CustomerCardSkeleton: React.FC = () => (
+  <div className="p-5 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-md">
+    {/* Header */}
+    <div className="flex items-start gap-3 mb-4">
+      <Skeleton className="w-12 h-12 rounded-xl shrink-0" />
+      <div className="flex-1 space-y-2">
+        <Skeleton className="h-5 w-72" />
+        <Skeleton className="h-3 w-96" />
+        <Skeleton className="h-3 w-64" />
+      </div>
+      <Skeleton className="w-7 h-7 rounded shrink-0" />
+    </div>
+    {/* KPI tiles */}
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="p-3 bg-slate-50 dark:bg-slate-900/40 rounded-lg">
+          <Skeleton className="h-2.5 w-20 mb-2" />
+          <Skeleton className="h-6 w-24" />
+        </div>
+      ))}
+    </div>
+    {/* Risk flags */}
+    <div className="flex gap-2 mb-4">
+      <Skeleton className="h-7 w-32 rounded-full" />
+      <Skeleton className="h-7 w-40 rounded-full" />
+      <Skeleton className="h-7 w-28 rounded-full" />
+    </div>
+    {/* Two columns */}
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
+      <div className="p-3 bg-slate-50 dark:bg-slate-900/40 rounded-lg">
+        <Skeleton className="h-3 w-40 mb-2" />
+        <Skeleton className="h-32 w-full" />
+      </div>
+      <div className="p-3 bg-slate-50 dark:bg-slate-900/40 rounded-lg space-y-2">
+        <Skeleton className="h-3 w-44 mb-2" />
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <Skeleton className="w-6 h-6 rounded" />
+            <Skeleton className="h-3 flex-1" />
+            <Skeleton className="h-3 w-12" />
+          </div>
+        ))}
+      </div>
+    </div>
+    {/* Contracts table */}
+    <div className="space-y-2">
+      <Skeleton className="h-3 w-40 mb-1" />
+      {Array.from({ length: 5 }).map((_, i) => (
+        <Skeleton key={i} className="h-8 w-full" />
+      ))}
+    </div>
+  </div>
+);
+
+
 export const TopTableSkeleton: React.FC<{ rows?: number; title?: string }> = ({ rows = 8 }) => (
   <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
     <Skeleton className="h-4 w-40 mb-3" />

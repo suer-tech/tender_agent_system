@@ -47,6 +47,10 @@ interface Props {
   fromDate: string;
   toDate: string;
   region: string;
+  /** Открыть карточку заказчика — клик в таблице контрактов на ячейке заказчика. */
+  onOpenCustomer?: (inn: string) => void;
+  /** Открыть карточку поставщика. */
+  onOpenSupplier?: (inn: string) => void;
 }
 
 /** Топ позиций (товаров/услуг) внутри выбранной отрасли — в виде лидерборда.
@@ -54,7 +58,7 @@ interface Props {
  *  скидки, последние контракты) для этого ОКПД2-кода.
  */
 export const SectorItemsCard: React.FC<Props> = ({
-  items, status, sectorLabel, fromDate, toDate, region,
+  items, status, sectorLabel, fromDate, toDate, region, onOpenCustomer, onOpenSupplier,
 }) => {
   const [metric, setMetric] = useState<Metric>('sum');
   // Только одна позиция раскрыта одновременно — клик по другой закрывает текущую.
@@ -153,6 +157,8 @@ export const SectorItemsCard: React.FC<Props> = ({
               onToggle={() => handleToggle(it.code)}
               onPage={(page) => fetchPage(it.code, page, sort)}
               onSort={(newSort) => fetchPage(it.code, 0, newSort)}
+              onOpenCustomer={onOpenCustomer}
+              onOpenSupplier={onOpenSupplier}
             />
           );
         })}
@@ -230,7 +236,9 @@ const ItemRow: React.FC<{
   onToggle: () => void;
   onPage: (page: number) => void;
   onSort: (sort: SortState) => void;
-}> = ({ item, metric, expanded, details, page, sort, loadingDetails, errorDetails, onToggle, onPage, onSort }) => {
+  onOpenCustomer?: (inn: string) => void;
+  onOpenSupplier?: (inn: string) => void;
+}> = ({ item, metric, expanded, details, page, sort, loadingDetails, errorDetails, onToggle, onPage, onSort, onOpenCustomer, onOpenSupplier }) => {
   const isMedal = item._rank <= 3;
   const medalCls =
     item._rank === 1 ? 'bg-amber-100 text-amber-700 ring-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:ring-amber-800/40' :
@@ -305,6 +313,8 @@ const ItemRow: React.FC<{
               fallbackName={item.name}
               onPage={onPage}
               onSort={onSort}
+              onOpenCustomer={onOpenCustomer}
+              onOpenSupplier={onOpenSupplier}
             />
           )}
         </div>
@@ -327,7 +337,9 @@ const ExpandedDetails: React.FC<{
   fallbackName: string | null;
   onPage: (page: number) => void;
   onSort: (sort: SortState) => void;
-}> = ({ details, page, sort, loading, error, fallbackName, onPage, onSort }) => {
+  onOpenCustomer?: (inn: string) => void;
+  onOpenSupplier?: (inn: string) => void;
+}> = ({ details, page, sort, loading, error, fallbackName, onPage, onSort, onOpenCustomer, onOpenSupplier }) => {
   if (loading && !details) {
     return (
       <div className="px-4 pb-4 pt-1 flex items-center justify-center gap-2 text-sm text-slate-500">
@@ -419,6 +431,8 @@ const ExpandedDetails: React.FC<{
           loading={loading}
           onPage={onPage}
           onSort={onSort}
+          onOpenCustomer={onOpenCustomer}
+          onOpenSupplier={onOpenSupplier}
         />
       ) : (
         <div className="text-xs text-slate-500 text-center py-4">
@@ -455,7 +469,9 @@ const ContractsTable: React.FC<{
   loading: boolean;
   onPage: (page: number) => void;
   onSort: (sort: SortState) => void;
-}> = ({ rows, page, total, sort, loading, onPage, onSort }) => {
+  onOpenCustomer?: (inn: string) => void;
+  onOpenSupplier?: (inn: string) => void;
+}> = ({ rows, page, total, sort, loading, onPage, onSort, onOpenCustomer, onOpenSupplier }) => {
   // Клик по сортируемому заголовку: тот же столбец → переключаем направление,
   // другой столбец → переключаемся на него с дефолтным dir (desc).
   const toggleSort = (by: SortBy) => {
@@ -515,14 +531,34 @@ const ContractsTable: React.FC<{
                     <div className="text-[10px] text-slate-400 font-mono mt-0.5">№ {r.reg_num}</div>
                   </td>
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-200 max-w-xs align-top">
-                    <div className="truncate" title={r.customer_name || ''}>
-                      {r.customer_short_name || r.customer_name || '—'}
-                    </div>
+                    {onOpenCustomer && r.customer_inn ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenCustomer(r.customer_inn!)}
+                        className="text-left truncate w-full text-xs text-indigo-700 dark:text-indigo-300 hover:underline"
+                        title={`${r.customer_name || ''} — открыть карточку заказчика`}>
+                        {r.customer_short_name || r.customer_name || '—'}
+                      </button>
+                    ) : (
+                      <div className="truncate" title={r.customer_name || ''}>
+                        {r.customer_short_name || r.customer_name || '—'}
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-slate-700 dark:text-slate-200 max-w-xs align-top">
-                    <div className="truncate" title={r.supplier_name || ''}>
-                      {r.supplier_short_name || r.supplier_name || '—'}
-                    </div>
+                    {onOpenSupplier && r.supplier_inn ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenSupplier(r.supplier_inn!)}
+                        className="text-left truncate w-full text-xs text-violet-700 dark:text-violet-300 hover:underline"
+                        title={`${r.supplier_name || ''} — открыть карточку поставщика`}>
+                        {r.supplier_short_name || r.supplier_name || '—'}
+                      </button>
+                    ) : (
+                      <div className="truncate" title={r.supplier_name || ''}>
+                        {r.supplier_short_name || r.supplier_name || '—'}
+                      </div>
+                    )}
                   </td>
                   {showNmck && (
                     <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap font-mono align-top"

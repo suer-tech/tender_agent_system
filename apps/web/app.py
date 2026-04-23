@@ -88,6 +88,28 @@ async def api_item_details(from_date: str, to_date: str, okpd2_code: str,
                                   sort_by, sort_dir)
 
 
+@app.get("/api/market/customer-details")
+async def api_customer_details(from_date: str, to_date: str, inn: str,
+                               contracts_limit: int = 20, contracts_offset: int = 0,
+                               sort_by: str = "date", sort_dir: str = "desc"):
+    """Drill-down: профиль заказчика — KPI за период, риски за всё время,
+    динамика, топ-исполнители, контракты с пагинацией."""
+    return analytics.customer_details(inn, from_date, to_date,
+                                       contracts_limit, contracts_offset,
+                                       sort_by, sort_dir)
+
+
+@app.get("/api/market/supplier-details")
+async def api_supplier_details(from_date: str, to_date: str, inn: str,
+                               contracts_limit: int = 20, contracts_offset: int = 0,
+                               sort_by: str = "date", sort_dir: str = "desc"):
+    """Drill-down: профиль поставщика — KPI за период, риски/РНП, динамика,
+    топ-заказчиков, контракты с пагинацией."""
+    return analytics.supplier_details(inn, from_date, to_date,
+                                       contracts_limit, contracts_offset,
+                                       sort_by, sort_dir)
+
+
 @app.get("/api/market/top-customers")
 async def api_top_customers(from_date: str, to_date: str,
                             okpd2: str = "", region: str = "", limit: int = 20):

@@ -353,7 +353,9 @@ def item_details(okpd2_code: str, region_code: str | None,
                    c.reg_num,
                    c.sign_date,
                    c.contract_subject,
+                   c.customer_inn,
                    c.customer_name,
+                   c.supplier_inn,
                    c.supplier_name,
                    c.contract_price,
                    n.max_price AS start_price,
@@ -437,6 +439,250 @@ def _with_short_name(d: dict) -> dict:
     """Добавить `short_name` к dict с полем `name` (для top_customers/suppliers)."""
     d["short_name"] = short_org_name(d.get("name"))
     return d
+
+
+def supplier_details(inn: str, from_date: str, to_date: str,
+                     contracts_limit: int = 20, contracts_offset: int = 0,
+                     sort_by: str = "date", sort_dir: str = "desc") -> dict:
+    """Полный профиль поставщика: KPI за период + риски за всё время +
+    динамика + связки с заказчиками + список контрактов с пагинацией.
+
+    Структурно зеркальна customer_details, но «top_customers» вместо
+    «top_suppliers», и в KPI считаем уникальных заказчиков."""
+    inn = (inn or "").strip()
+    if not inn:
+        return {"inn": "", "enough_data": False}
+    period_sql, period_params = _period_clause(from_date, to_date)
+
+    with eis_analytics.conn() as c:
+        head = c.execute("""
+            SELECT MAX(supplier_name) AS name, MAX(supplier_kpp) AS kpp,
+                   MAX(supplier_type) AS supplier_type
+            FROM contracts WHERE supplier_inn = ?
+        """, (inn,)).fetchone()
+        full_name = head["name"] if head else None
+
+        kpi = c.execute(f"""
+            SELECT COUNT(DISTINCT reg_num) AS contracts_count,
+                   COALESCE(SUM(DISTINCT contract_price), 0) AS total_sum,
+                   AVG(DISTINCT contract_price) AS avg_price,
+                   COUNT(DISTINCT customer_inn) AS unique_customers
+            FROM contracts c
+            WHERE supplier_inn = ? AND {period_sql}
+        """, [inn] + period_params).fetchone()
+        contracts_total = int(kpi["contracts_count"] or 0)
+        total_sum = float(kpi["total_sum"] or 0)
+
+        ts_rows = c.execute(f"""
+            SELECT substr(sign_date, 1, 7) AS month,
+                   COUNT(DISTINCT reg_num) AS contracts,
+                   COALESCE(SUM(DISTINCT contract_price), 0) AS total_sum
+            FROM contracts c
+            WHERE supplier_inn = ? AND {period_sql} AND sign_date IS NOT NULL
+            GROUP BY month ORDER BY month
+        """, [inn] + period_params).fetchall()
+
+        # Топ заказчиков с долей — связки в обратную сторону
+        cust_rows = c.execute(f"""
+            SELECT customer_inn AS inn, MAX(customer_name) AS name,
+                   COUNT(DISTINCT reg_num) AS contracts,
+                   COALESCE(SUM(DISTINCT contract_price), 0) AS total_sum
+            FROM contracts c
+            WHERE supplier_inn = ? AND {period_sql}
+              AND customer_inn IS NOT NULL
+            GROUP BY customer_inn
+            ORDER BY total_sum DESC
+            LIMIT 10
+        """, [inn] + period_params).fetchall()
+        top_customers = []
+        for r in cust_rows:
+            d = dict(r)
+            d["short_name"] = short_org_name(d.get("name"))
+            d["share_pct"] = round((d["total_sum"] / total_sum) * 100, 2) if total_sum else 0.0
+            top_customers.append(d)
+        concentration = top_customers[0]["share_pct"] if top_customers else 0.0
+
+        sort_columns = {"date": "c.sign_date", "price": "c.contract_price"}
+        order_col = sort_columns.get(sort_by, "c.sign_date")
+        order_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
+
+        contract_rows = c.execute(f"""
+            SELECT c.reg_num, c.sign_date, c.contract_subject,
+                   c.customer_inn, c.customer_name,
+                   c.supplier_inn, c.supplier_name,
+                   c.contract_price, n.max_price AS start_price,
+                   CASE WHEN n.max_price > 0 AND c.contract_price IS NOT NULL
+                        THEN 100.0 * (1 - c.contract_price * 1.0 / n.max_price)
+                        ELSE NULL END AS discount_pct
+            FROM contracts c
+            LEFT JOIN notices n ON n.reg_number = c.purchase_number
+            WHERE c.supplier_inn = ? AND {period_sql}
+            ORDER BY {order_col} {order_dir} NULLS LAST, c.reg_num DESC
+            LIMIT ? OFFSET ?
+        """, [inn] + period_params + [contracts_limit, contracts_offset]).fetchall()
+        contracts_out = []
+        for r in contract_rows:
+            d = dict(r)
+            d["customer_short_name"] = short_org_name(d.get("customer_name"))
+            d["supplier_short_name"] = short_org_name(d.get("supplier_name"))
+            contracts_out.append(d)
+
+    from .risk import risk_by_inn
+    risk = risk_by_inn(inn)
+    if not full_name:
+        full_name = risk.get("name")
+
+    return {
+        "inn": inn,
+        "name": full_name,
+        "short_name": short_org_name(full_name),
+        "supplier_type": head["supplier_type"] if head else None,
+        # KPI за период
+        "contracts_count": contracts_total,
+        "total_sum_rub": total_sum,
+        "avg_price_rub": float(kpi["avg_price"] or 0) if kpi["avg_price"] else None,
+        "unique_customers": int(kpi["unique_customers"] or 0),
+        # Риски
+        "risk_score": risk.get("risk_score", 0),
+        "risk_flags": risk.get("risk_flags", []),
+        "in_rnp": risk.get("as_supplier", {}).get("in_rnp", False),
+        "rnp_records": risk.get("as_supplier", {}).get("rnp_records", []),
+        "unilateral_refusals_against": risk.get("as_supplier", {}).get("unilateral_refusals_against", 0),
+        "complaints_as_applicant": risk.get("as_supplier", {}).get("complaints_as_applicant", 0),
+        "all_time_contracts_count": risk.get("as_supplier", {}).get("contracts_total", 0),
+        # Графики и связки
+        "timeseries": [dict(r) for r in ts_rows],
+        "top_customers": top_customers,
+        "concentration_pct": concentration,
+        # Список контрактов
+        "contracts": contracts_out,
+        "contracts_total": contracts_total,
+    }
+
+
+def customer_details(inn: str, from_date: str, to_date: str,
+                     contracts_limit: int = 20, contracts_offset: int = 0,
+                     sort_by: str = "date", sort_dir: str = "desc") -> dict:
+    """Полный профиль заказчика: KPI за период + риски за всё время +
+    динамика + связки с поставщиками + список контрактов с пагинацией.
+
+    Регион/отрасль не применяем — карточка про конкретное юр.лицо."""
+    inn = (inn or "").strip()
+    if not inn:
+        return {"inn": "", "enough_data": False}
+    period_sql, period_params = _period_clause(from_date, to_date)
+
+    with eis_analytics.conn() as c:
+        # ------ Заголовок ------
+        head = c.execute("""
+            SELECT MAX(customer_name) AS name, MAX(customer_region) AS region_code,
+                   MAX(customer_kpp) AS kpp
+            FROM contracts WHERE customer_inn = ?
+        """, (inn,)).fetchone()
+        full_name = head["name"] if head else None
+        region_code = head["region_code"] if head else None
+
+        # ------ KPI за период ------
+        kpi = c.execute(f"""
+            SELECT COUNT(DISTINCT reg_num) AS contracts_count,
+                   COALESCE(SUM(DISTINCT contract_price), 0) AS total_sum,
+                   AVG(DISTINCT contract_price) AS avg_price,
+                   COUNT(DISTINCT supplier_inn) AS unique_suppliers
+            FROM contracts c
+            WHERE customer_inn = ? AND {period_sql}
+        """, [inn] + period_params).fetchone()
+        contracts_total = int(kpi["contracts_count"] or 0)
+        total_sum = float(kpi["total_sum"] or 0)
+
+        # ------ Динамика по месяцам (за период) ------
+        ts_rows = c.execute(f"""
+            SELECT substr(sign_date, 1, 7) AS month,
+                   COUNT(DISTINCT reg_num) AS contracts,
+                   COALESCE(SUM(DISTINCT contract_price), 0) AS total_sum
+            FROM contracts c
+            WHERE customer_inn = ? AND {period_sql} AND sign_date IS NOT NULL
+            GROUP BY month ORDER BY month
+        """, [inn] + period_params).fetchall()
+
+        # ------ Топ поставщиков с долей (за период) ------
+        sup_rows = c.execute(f"""
+            SELECT supplier_inn AS inn, MAX(supplier_name) AS name,
+                   COUNT(DISTINCT reg_num) AS contracts,
+                   COALESCE(SUM(DISTINCT contract_price), 0) AS total_sum
+            FROM contracts c
+            WHERE customer_inn = ? AND {period_sql}
+              AND supplier_inn IS NOT NULL
+            GROUP BY supplier_inn
+            ORDER BY total_sum DESC
+            LIMIT 10
+        """, [inn] + period_params).fetchall()
+        top_suppliers = []
+        for r in sup_rows:
+            d = dict(r)
+            d["short_name"] = short_org_name(d.get("name"))
+            d["share_pct"] = round((d["total_sum"] / total_sum) * 100, 2) if total_sum else 0.0
+            top_suppliers.append(d)
+        # Концентрация — флаг для UI: топ-поставщик держит >50% объёма.
+        concentration = top_suppliers[0]["share_pct"] if top_suppliers else 0.0
+
+        # ------ Контракты — пагинация + сорт (whitelist!) ------
+        sort_columns = {"date": "c.sign_date", "price": "c.contract_price"}
+        order_col = sort_columns.get(sort_by, "c.sign_date")
+        order_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
+
+        contract_rows = c.execute(f"""
+            SELECT c.reg_num, c.sign_date, c.contract_subject,
+                   c.customer_name, c.supplier_name,
+                   c.contract_price, n.max_price AS start_price,
+                   CASE WHEN n.max_price > 0 AND c.contract_price IS NOT NULL
+                        THEN 100.0 * (1 - c.contract_price * 1.0 / n.max_price)
+                        ELSE NULL END AS discount_pct
+            FROM contracts c
+            LEFT JOIN notices n ON n.reg_number = c.purchase_number
+            WHERE c.customer_inn = ? AND {period_sql}
+            ORDER BY {order_col} {order_dir} NULLS LAST, c.reg_num DESC
+            LIMIT ? OFFSET ?
+        """, [inn] + period_params + [contracts_limit, contracts_offset]).fetchall()
+        contracts_out = []
+        for r in contract_rows:
+            d = dict(r)
+            d["customer_short_name"] = short_org_name(d.get("customer_name"))
+            d["supplier_short_name"] = short_org_name(d.get("supplier_name"))
+            contracts_out.append(d)
+
+    # ------ Риски — за всё время через risk_by_inn (переиспользуем) ------
+    from .risk import risk_by_inn
+    risk = risk_by_inn(inn)
+    # Подтянем имя если в contracts его нет (только notices) и наоборот.
+    if not full_name:
+        full_name = risk.get("name")
+
+    return {
+        "inn": inn,
+        "name": full_name,
+        "short_name": short_org_name(full_name),
+        "region_code": region_code,
+        # KPI за период
+        "contracts_count": contracts_total,
+        "total_sum_rub": total_sum,
+        "avg_price_rub": float(kpi["avg_price"] or 0) if kpi["avg_price"] else None,
+        "unique_suppliers": int(kpi["unique_suppliers"] or 0),
+        # Риски — снимаем плоско, чтобы UI не лез в as_customer/as_supplier
+        "risk_score": risk.get("risk_score", 0),
+        "risk_flags": risk.get("risk_flags", []),
+        "complaints_count": risk.get("as_customer", {}).get("complaints_count", 0),
+        "unilateral_refusals_count": risk.get("as_customer", {}).get("unilateral_refusals_count", 0),
+        "in_rnp_as_supplier": risk.get("as_supplier", {}).get("in_rnp", False),
+        "all_time_contracts_count": risk.get("as_customer", {}).get("contracts_total", 0),
+        "all_time_notices_count": risk.get("as_customer", {}).get("notices_count", 0),
+        # Графики и связки
+        "timeseries": [dict(r) for r in ts_rows],
+        "top_suppliers": top_suppliers,
+        "concentration_pct": concentration,
+        # Список контрактов
+        "contracts": contracts_out,
+        "contracts_total": contracts_total,
+    }
 
 
 def time_series_by_month(okpd2_prefix: str | None, region_code: str | None,

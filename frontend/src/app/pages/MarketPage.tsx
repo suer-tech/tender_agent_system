@@ -12,10 +12,13 @@ import { ArrowLeft, TrendingDown, Building2, Factory, BarChart3, Search, PiggyBa
 import { useAppState } from '../store';
 import { SectorsCard } from '../components/SectorsCard';
 import { SectorItemsCard } from '../components/SectorItemsCard';
+import { CustomerCard } from '../components/CustomerCard';
+import { SupplierCard } from '../components/SupplierCard';
 import {
   TopProgressBar, Refreshing, AnalyticsLoader, SkeletonOverlayLoader,
   StatTilesSkeleton, LineChartSkeleton, DiscountsCardSkeleton,
   SectorsCardSkeleton, SectorItemsCardSkeleton, TopTableSkeleton,
+  CustomerCardSkeleton,
 } from '../components/Skeletons';
 
 const fmtMln = (v: number | null | undefined) =>
@@ -83,6 +86,48 @@ export const MarketPage: React.FC = () => {
     : [load_overview, load_sectors, load_customers, load_suppliers, load_timeseries];
   const totalSections = flags.length;
   const doneSections = flags.filter(f => !f).length;
+
+  // Drill-down карточки заказчика и поставщика (внизу страницы). Могут быть
+  // открыты независимо — это полезно для перекрёстного анализа: видим
+  // заказчика → его топ-поставщика → клик → рядом карточка поставщика.
+  const [selectedCustomerInn, setSelectedCustomerInn] = useState<string | null>(null);
+  const [selectedSupplierInn, setSelectedSupplierInn] = useState<string | null>(null);
+  const customerCardRef = useRef<HTMLDivElement | null>(null);
+  const supplierCardRef = useRef<HTMLDivElement | null>(null);
+  const openCustomer = useCallback((inn: string) => {
+    if (inn) setSelectedCustomerInn(inn);
+  }, []);
+  const openSupplier = useCallback((inn: string) => {
+    if (inn) setSelectedSupplierInn(inn);
+  }, []);
+  // Скролл к самой свежей открытой/перевыбранной карточке.
+  useEffect(() => {
+    if (selectedCustomerInn && customerCardRef.current) {
+      customerCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [selectedCustomerInn]);
+  useEffect(() => {
+    if (selectedSupplierInn && supplierCardRef.current) {
+      supplierCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [selectedSupplierInn]);
+  // Esc закрывает обе карточки сразу — простая и предсказуемая модель.
+  useEffect(() => {
+    if (!selectedCustomerInn && !selectedSupplierInn) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedCustomerInn(null);
+        setSelectedSupplierInn(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedCustomerInn, selectedSupplierInn]);
+  // При смене отрасли drill-down карточки теряют контекст — закрываем.
+  useEffect(() => {
+    setSelectedCustomerInn(null);
+    setSelectedSupplierInn(null);
+  }, [okpd2]);
 
   // «Первая загрузка завершена» = когда anyLoading хоть раз перешёл из
   // true в false. Делаем это через отслеживание перехода, а не через
@@ -310,6 +355,8 @@ export const MarketPage: React.FC = () => {
                   fromDate={fromDate}
                   toDate={toDate}
                   region={region}
+                  onOpenCustomer={openCustomer}
+                  onOpenSupplier={openSupplier}
                 />
               </Refreshing>
             )}
@@ -322,17 +369,46 @@ export const MarketPage: React.FC = () => {
             <TopTableSkeleton />
           ) : (
             <Refreshing loading={load_customers}>
-              <TopTable icon={<Building2 className="w-5 h-5" />} title="Топ заказчиков" rows={customers} />
+              <TopTable icon={<Building2 className="w-5 h-5" />} title="Топ заказчиков" rows={customers} onClickInn={openCustomer} />
             </Refreshing>
           )}
           {suppliers.length === 0 && load_suppliers ? (
             <TopTableSkeleton />
           ) : (
             <Refreshing loading={load_suppliers}>
-              <TopTable icon={<Factory className="w-5 h-5" />} title="Топ поставщиков" rows={suppliers} />
+              <TopTable icon={<Factory className="w-5 h-5" />} title="Топ поставщиков" rows={suppliers} onClickInn={openSupplier} />
             </Refreshing>
           )}
         </div>
+
+        {/* Карточки drill-down. Заказчик и поставщик могут быть открыты
+            одновременно — это удобно для перекрёстного анализа связок.
+            Каждая управляется независимо: свой Esc/X, свой scrollIntoView. */}
+        {selectedCustomerInn && (
+          <div ref={customerCardRef} className="mt-6">
+            <CustomerCard
+              key={selectedCustomerInn}
+              inn={selectedCustomerInn}
+              fromDate={fromDate}
+              toDate={toDate}
+              onClose={() => setSelectedCustomerInn(null)}
+              onOpenAnother={openCustomer}
+              onOpenSupplier={openSupplier}
+            />
+          </div>
+        )}
+        {selectedSupplierInn && (
+          <div ref={supplierCardRef} className="mt-6">
+            <SupplierCard
+              key={selectedSupplierInn}
+              inn={selectedSupplierInn}
+              fromDate={fromDate}
+              toDate={toDate}
+              onClose={() => setSelectedSupplierInn(null)}
+              onOpenCustomer={openCustomer}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -463,7 +539,10 @@ function sectorBadgeLabel(prefix: string, sectors: TopEntry[]): string {
   return name ? `${prefix} — ${name}` : prefix;
 }
 
-const TopTable: React.FC<{ icon: React.ReactNode; title: string; rows: TopEntry[] }> = ({ icon, title, rows }) => (
+const TopTable: React.FC<{
+  icon: React.ReactNode; title: string; rows: TopEntry[];
+  onClickInn?: (inn: string) => void;
+}> = ({ icon, title, rows, onClickInn }) => (
   <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
     <div className="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">
       {icon} {title}
@@ -480,16 +559,26 @@ const TopTable: React.FC<{ icon: React.ReactNode; title: string; rows: TopEntry[
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={r.inn || i} className="border-b border-slate-100 dark:border-slate-800">
-              <td className="py-1.5 pr-2 truncate max-w-xs" title={r.name}>
-                <div className="font-medium text-slate-700 dark:text-slate-200 truncate">{r.short_name || r.name || r.inn}</div>
-                <div className="text-slate-400 text-[10px]">ИНН {r.inn}</div>
-              </td>
-              <td className="text-right py-1.5 text-slate-600 dark:text-slate-300">{r.contracts}</td>
-              <td className="text-right py-1.5 font-semibold text-slate-700 dark:text-slate-200">{fmtMln(r.total_sum)}</td>
-            </tr>
-          ))}
+          {rows.map((r, i) => {
+            const clickable = !!onClickInn && !!r.inn;
+            return (
+              <tr key={r.inn || i}
+                  onClick={clickable ? () => onClickInn!(r.inn!) : undefined}
+                  className={`border-b border-slate-100 dark:border-slate-800 transition-colors
+                              ${clickable ? 'cursor-pointer hover:bg-indigo-50/40 dark:hover:bg-indigo-900/15' : ''}`}>
+                <td className="py-1.5 pr-2 truncate max-w-xs" title={r.name}>
+                  <div className={`font-medium truncate ${clickable
+                    ? 'text-indigo-700 dark:text-indigo-300 hover:underline'
+                    : 'text-slate-700 dark:text-slate-200'}`}>
+                    {r.short_name || r.name || r.inn}
+                  </div>
+                  <div className="text-slate-400 text-[10px]">ИНН {r.inn}</div>
+                </td>
+                <td className="text-right py-1.5 text-slate-600 dark:text-slate-300">{r.contracts}</td>
+                <td className="text-right py-1.5 font-semibold text-slate-700 dark:text-slate-200">{fmtMln(r.total_sum)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     )}

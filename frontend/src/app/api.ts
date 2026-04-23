@@ -77,8 +77,10 @@ export interface ContractDetail {
   reg_num: string;
   sign_date: string | null;
   contract_subject: string | null;
+  customer_inn?: string | null;
   customer_name: string | null;
   customer_short_name: string | null;
+  supplier_inn?: string | null;
   supplier_name: string | null;
   supplier_short_name: string | null;
   contract_price: number | null;
@@ -92,6 +94,78 @@ export interface ItemDetails {
   timeseries: { month: string; contracts: number; total_sum: number }[];
   discount_pct_median: number | null;
   discounts_sample: number;
+  contracts: ContractDetail[];
+  contracts_total: number;
+}
+
+export interface SupplierShare {
+  inn: string;
+  name: string | null;
+  short_name: string;
+  contracts: number;
+  total_sum: number;
+  share_pct: number;
+}
+
+export interface CustomerShare {
+  inn: string;
+  name: string | null;
+  short_name: string;
+  contracts: number;
+  total_sum: number;
+  share_pct: number;
+}
+
+export interface SupplierDetails {
+  inn: string;
+  name: string | null;
+  short_name: string;
+  supplier_type: string | null;
+  // KPI за период
+  contracts_count: number;
+  total_sum_rub: number;
+  avg_price_rub: number | null;
+  unique_customers: number;
+  // Риски (за всё время)
+  risk_score: number;
+  risk_flags: string[];
+  in_rnp: boolean;
+  rnp_records: any[];
+  unilateral_refusals_against: number;
+  complaints_as_applicant: number;
+  all_time_contracts_count: number;
+  // Графики и связки
+  timeseries: { month: string; contracts: number; total_sum: number }[];
+  top_customers: CustomerShare[];
+  concentration_pct: number;
+  // Контракты
+  contracts: ContractDetail[];
+  contracts_total: number;
+}
+
+export interface CustomerDetails {
+  inn: string;
+  name: string | null;
+  short_name: string;
+  region_code: string | null;
+  // KPI за период
+  contracts_count: number;
+  total_sum_rub: number;
+  avg_price_rub: number | null;
+  unique_suppliers: number;
+  // Риски (за всё время)
+  risk_score: number;
+  risk_flags: string[];
+  complaints_count: number;
+  unilateral_refusals_count: number;
+  in_rnp_as_supplier: boolean;
+  all_time_contracts_count: number;
+  all_time_notices_count: number;
+  // Графики и связки (за период)
+  timeseries: { month: string; contracts: number; total_sum: number }[];
+  top_suppliers: SupplierShare[];
+  concentration_pct: number;
+  // Контракты с пагинацией
   contracts: ContractDetail[];
   contracts_total: number;
 }
@@ -132,6 +206,12 @@ export const api = {
 
   itemDetails: (params: { from_date: string; to_date: string; okpd2_code: string; region?: string; contracts_limit?: number; contracts_offset?: number; sort_by?: 'date' | 'price'; sort_dir?: 'asc' | 'desc' }) =>
     fetchJson<ItemDetails>(`/api/market/item-details${q(params)}`),
+
+  customerDetails: (params: { from_date: string; to_date: string; inn: string; contracts_limit?: number; contracts_offset?: number; sort_by?: 'date' | 'price'; sort_dir?: 'asc' | 'desc' }) =>
+    fetchJson<CustomerDetails>(`/api/market/customer-details${q(params)}`),
+
+  supplierDetails: (params: { from_date: string; to_date: string; inn: string; contracts_limit?: number; contracts_offset?: number; sort_by?: 'date' | 'price'; sort_dir?: 'asc' | 'desc' }) =>
+    fetchJson<SupplierDetails>(`/api/market/supplier-details${q(params)}`),
 
   topCustomers: (params: { from_date: string; to_date: string; okpd2?: string; region?: string; limit?: number }) =>
     fetchJson<TopEntry[]>(`/api/market/top-customers${q(params)}`),
