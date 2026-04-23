@@ -61,6 +61,14 @@ export interface TopEntry {
   share_pct?: number;
 }
 
+export interface TopItemEntry {
+  code: string;
+  name: string | null;
+  contracts: number;
+  total_sum: number;
+  share_pct: number;
+}
+
 export interface TimeSeriesEntry {
   month: string;
   contracts: number;
@@ -91,6 +99,9 @@ export const api = {
 
   topSectors: (params: { from_date: string; to_date: string; region?: string; limit?: number }) =>
     fetchJson<TopEntry[]>(`/api/market/top-sectors${q(params)}`),
+
+  topItemsInSector: (params: { from_date: string; to_date: string; okpd2: string; region?: string; limit?: number }) =>
+    fetchJson<TopItemEntry[]>(`/api/market/top-items-in-sector${q(params)}`),
 
   topCustomers: (params: { from_date: string; to_date: string; okpd2?: string; region?: string; limit?: number }) =>
     fetchJson<TopEntry[]>(`/api/market/top-customers${q(params)}`),

@@ -197,6 +197,61 @@ def top_sectors(region_code: str | None, from_date: str, to_date: str,
     return out
 
 
+def top_items_in_sector(okpd2_prefix: str, region_code: str | None,
+                        from_date: str, to_date: str, limit: int = 15) -> list[dict]:
+    """Топ позиций (товаров/услуг) внутри выбранной отрасли по сумме позиций.
+
+    Группируем по полному ОКПД2-коду (4–9 знаков), название берём из
+    `okpd2_name` справочника. Метрика — SUM(`sum_amount`) позиций, а не
+    `contract_price` контракта: один контракт может содержать позиции
+    из разных подразделов одной отрасли, и мы хотим разнести их по
+    реальным товарам.
+
+    `share_pct` — доля позиции в общем объёме позиций *этой отрасли*
+    (не всего рынка), чтобы видеть концентрацию внутри.
+    """
+    if not okpd2_prefix:
+        return []
+
+    region_sql = "1=1"; region_params: list = []
+    if region_code:
+        region_sql = "c.customer_region = ?"; region_params = [region_code]
+    period_sql, period_params = _period_clause(from_date, to_date)
+    okpd2_sql, okpd2_params = okpd2_prefix_clause(okpd2_prefix, "ci.okpd2_code")
+
+    with eis_analytics.conn() as c:
+        # Сумма всех позиций внутри отрасли — база для долей.
+        total_row = c.execute(f"""
+            SELECT COALESCE(SUM(ci.sum_amount), 0) AS total
+            FROM contracts c
+            JOIN contract_items ci ON ci.reg_num = c.reg_num
+            WHERE {okpd2_sql} AND {region_sql} AND {period_sql}
+              AND ci.sum_amount IS NOT NULL AND ci.sum_amount > 0
+        """, okpd2_params + region_params + period_params).fetchone()
+        sector_total = float(total_row["total"] or 0)
+
+        rows = c.execute(f"""
+            SELECT ci.okpd2_code AS code,
+                   MAX(ci.okpd2_name) AS name,
+                   COUNT(DISTINCT c.reg_num) AS contracts,
+                   COALESCE(SUM(ci.sum_amount), 0) AS total_sum
+            FROM contracts c
+            JOIN contract_items ci ON ci.reg_num = c.reg_num
+            WHERE {okpd2_sql} AND {region_sql} AND {period_sql}
+              AND ci.okpd2_code IS NOT NULL
+              AND ci.sum_amount IS NOT NULL AND ci.sum_amount > 0
+            GROUP BY ci.okpd2_code
+            ORDER BY total_sum DESC LIMIT ?
+        """, okpd2_params + region_params + period_params + [limit]).fetchall()
+
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        d["share_pct"] = round(d["total_sum"] / sector_total * 100, 2) if sector_total else 0.0
+        out.append(d)
+    return out
+
+
 def top_customers(okpd2_prefix: str | None, region_code: str | None,
                   from_date: str, to_date: str, limit: int = 20) -> list[dict]:
     okpd2_sql, okpd2_params = okpd2_prefix_clause(okpd2_prefix or "", "ci.okpd2_code")

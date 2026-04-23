@@ -67,6 +67,12 @@ async def api_top_sectors(from_date: str, to_date: str,
     return analytics.top_sectors(region or None, from_date, to_date, limit)
 
 
+@app.get("/api/market/top-items-in-sector")
+async def api_top_items_in_sector(from_date: str, to_date: str, okpd2: str,
+                                  region: str = "", limit: int = 15):
+    return analytics.top_items_in_sector(okpd2, region or None, from_date, to_date, limit)
+
+
 @app.get("/api/market/top-customers")
 async def api_top_customers(from_date: str, to_date: str,
                             okpd2: str = "", region: str = "", limit: int = 20):

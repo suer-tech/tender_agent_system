@@ -6,11 +6,12 @@ import {
 } from 'recharts';
 import {
   api, REGIONS, OKPD2_TOP,
-  MarketOverview, TopEntry, TimeSeriesEntry,
+  MarketOverview, TopEntry, TopItemEntry, TimeSeriesEntry,
 } from '../api';
 import { ArrowLeft, TrendingDown, Building2, Factory, BarChart3, Loader2, Search } from 'lucide-react';
 import { useAppState } from '../store';
 import { SectorsCard } from '../components/SectorsCard';
+import { SectorItemsCard } from '../components/SectorItemsCard';
 
 const fmtMln = (v: number | null | undefined) =>
   v == null ? '—' : v >= 1_000_000_000
@@ -45,6 +46,7 @@ export const MarketPage: React.FC = () => {
 
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [sectors, setSectors] = useState<TopEntry[]>([]);
+  const [items, setItems] = useState<TopItemEntry[]>([]);
   const [customers, setCustomers] = useState<TopEntry[]>([]);
   const [suppliers, setSuppliers] = useState<TopEntry[]>([]);
   const [timeseries, setTimeseries] = useState<TimeSeriesEntry[]>([]);
@@ -62,15 +64,25 @@ export const MarketPage: React.FC = () => {
       from_date: fromDate, to_date: toDate,
       region: region || undefined, limit: 30,
     };
+    // Топ позиций — только когда выбрана отрасль (иначе бессмысленно).
+    const itemsPromise = okpd2
+      ? api.topItemsInSector({
+          from_date: fromDate, to_date: toDate, okpd2,
+          region: region || undefined, limit: 15,
+        })
+      : Promise.resolve([] as TopItemEntry[]);
+
     try {
-      const [ov, sc, cs, sp, ts] = await Promise.all([
+      const [ov, sc, it, cs, sp, ts] = await Promise.all([
         api.marketOverview(params),
         api.topSectors(sectorsParams),
+        itemsPromise,
         api.topCustomers({ ...params, limit: 10 }),
         api.topSuppliers({ ...params, limit: 10 }),
         api.timeseries(params),
       ]);
-      setOverview(ov); setSectors(sc); setCustomers(cs); setSuppliers(sp); setTimeseries(ts);
+      setOverview(ov); setSectors(sc); setItems(it);
+      setCustomers(cs); setSuppliers(sp); setTimeseries(ts);
     } catch (e) {
       console.error('[market] load failed', e);
     } finally {
@@ -178,6 +190,16 @@ export const MarketPage: React.FC = () => {
         <div className="mb-6">
           <SectorsCard sectors={sectors} selectedOkpd2={okpd2} onSelect={setOkpd2} />
         </div>
+
+        {/* Ряд 2.5: drill-down — позиции внутри выбранной отрасли */}
+        {okpd2 && (
+          <div className="mb-6">
+            <SectorItemsCard
+              items={items}
+              sectorLabel={`${okpd2}${sectorNameOf(sectors, okpd2) ? ` — ${sectorNameOf(sectors, okpd2)}` : ''}`}
+            />
+          </div>
+        )}
 
         {/* Ряд 3: топы заказчиков и поставщиков */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
