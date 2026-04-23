@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid, Legend,
 } from 'recharts';
 import {
@@ -10,6 +10,7 @@ import {
 } from '../api';
 import { ArrowLeft, TrendingDown, Building2, Factory, BarChart3, Loader2, Search } from 'lucide-react';
 import { useAppState } from '../store';
+import { SectorsCard } from '../components/SectorsCard';
 
 const fmtMln = (v: number | null | undefined) =>
   v == null ? '—' : v >= 1_000_000_000
@@ -55,10 +56,16 @@ export const MarketPage: React.FC = () => {
       from_date: fromDate, to_date: toDate,
       okpd2: okpd2 || undefined, region: region || undefined,
     };
+    // Топ отраслей всегда показываем по всему рынку (без okpd2-фильтра) —
+    // выбранная отрасль подсвечивается на фоне общей картины.
+    const sectorsParams = {
+      from_date: fromDate, to_date: toDate,
+      region: region || undefined, limit: 30,
+    };
     try {
       const [ov, sc, cs, sp, ts] = await Promise.all([
         api.marketOverview(params),
-        api.topSectors({ ...params, limit: 10 }),
+        api.topSectors(sectorsParams),
         api.topCustomers({ ...params, limit: 10 }),
         api.topSuppliers({ ...params, limit: 10 }),
         api.timeseries(params),
@@ -106,6 +113,13 @@ export const MarketPage: React.FC = () => {
               <label className="block text-xs font-semibold text-slate-500 mb-1">Отрасль (ОКПД2)</label>
               <select value={okpd2} onChange={e => setOkpd2(e.target.value)} className={selectCls} style={selectStyle}>
                 {OKPD2_TOP.map(o => <option key={o.code} value={o.code}>{o.name}</option>)}
+                {/* Если выбранный префикс пришёл с клика по бару и его нет в OKPD2_TOP — дописываем,
+                    иначе селектор рассинхронизируется с реальным фильтром. */}
+                {okpd2 && !OKPD2_TOP.some(o => o.code === okpd2) && (
+                  <option value={okpd2}>
+                    {okpd2}{sectorNameOf(sectors, okpd2) ? ` — ${sectorNameOf(sectors, okpd2)}` : ''}
+                  </option>
+                )}
               </select>
             </div>
             <div>
@@ -136,25 +150,10 @@ export const MarketPage: React.FC = () => {
           </div>
         )}
 
-        {/* Discount panel */}
-        {overview && overview.discounts_sample > 0 && (
-          <div className="mb-6 p-4 bg-emerald-50/50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/40 rounded-xl">
-            <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-semibold mb-2">
-              <TrendingDown className="w-5 h-5" /> Скидки на торгах
-            </div>
-            <div className="grid grid-cols-3 gap-4 text-sm">
-              <div><span className="text-slate-500">25-й перцентиль:</span> <b>{fmtPct(overview.discount_pct_p25)}</b></div>
-              <div><span className="text-slate-500">медиана:</span> <b>{fmtPct(overview.discount_pct_median)}</b></div>
-              <div><span className="text-slate-500">75-й перцентиль:</span> <b>{fmtPct(overview.discount_pct_p75)}</b></div>
-            </div>
-            <div className="mt-1 text-xs text-slate-500">Выборка {overview.discounts_sample} контрактов со связкой «извещение-контракт»</div>
-          </div>
-        )}
-
-        {/* Charts */}
+        {/* Ряд 1: динамика по месяцам + скидки на торгах */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          {timeseries.length > 0 && (
-            <ChartCard title="Динамика контрактов по месяцам">
+          <ChartCard title="Динамика контрактов по месяцам">
+            {timeseries.length > 0 ? (
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={timeseries}>
                   <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
@@ -165,24 +164,22 @@ export const MarketPage: React.FC = () => {
                   <Line type="monotone" dataKey="contracts" stroke="#6366f1" name="Контрактов" />
                 </LineChart>
               </ResponsiveContainer>
-            </ChartCard>
-          )}
+            ) : (
+              <div className="h-[220px] flex items-center justify-center text-sm text-slate-500">
+                Нет данных за выбранный период
+              </div>
+            )}
+          </ChartCard>
 
-          {sectors.length > 0 && !okpd2 && (
-            <ChartCard title="Топ отраслей (ОКПД2) по объёму">
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={sectors.slice(0, 10)} layout="vertical">
-                  <XAxis type="number" fontSize={11} tickFormatter={v => fmtMln(v)} />
-                  <YAxis dataKey="prefix" type="category" fontSize={11} width={40} />
-                  <Tooltip formatter={(v: any) => fmtMln(v as number)} />
-                  <Bar dataKey="total_sum" fill="#10b981" />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartCard>
-          )}
+          <DiscountsCard overview={overview} />
         </div>
 
-        {/* Top tables */}
+        {/* Ряд 2: топ отраслей на всю ширину */}
+        <div className="mb-6">
+          <SectorsCard sectors={sectors} selectedOkpd2={okpd2} onSelect={setOkpd2} />
+        </div>
+
+        {/* Ряд 3: топы заказчиков и поставщиков */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <TopTable icon={<Building2 className="w-5 h-5" />} title="Топ заказчиков" rows={customers} />
           <TopTable icon={<Factory className="w-5 h-5" />} title="Топ поставщиков" rows={suppliers} />
@@ -207,6 +204,53 @@ const ChartCard: React.FC<{ title: string; children: React.ReactNode }> = ({ tit
     {children}
   </div>
 );
+
+
+const DiscountsCard: React.FC<{ overview: MarketOverview | null }> = ({ overview }) => {
+  const has = overview && overview.discounts_sample > 0;
+  return (
+    <div className="p-4 bg-emerald-50/40 dark:bg-emerald-900/15 rounded-xl border border-emerald-200 dark:border-emerald-800/40 shadow-sm flex flex-col">
+      <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300 mb-3">
+        <TrendingDown className="w-4 h-4" /> Скидки на торгах
+      </div>
+      {has ? (
+        <>
+          <div className="grid grid-cols-3 gap-2 flex-1 content-center">
+            <PercentileTile label="P25" value={fmtPct(overview!.discount_pct_p25)} />
+            <PercentileTile label="Медиана" value={fmtPct(overview!.discount_pct_median)} highlight />
+            <PercentileTile label="P75" value={fmtPct(overview!.discount_pct_p75)} />
+          </div>
+          <div className="text-xs text-slate-500 mt-3">
+            Выборка {overview!.discounts_sample.toLocaleString('ru-RU')} контрактов со связкой «извещение–контракт»
+          </div>
+        </>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
+          Недостаточно связок «извещение–контракт» для расчёта
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+const PercentileTile: React.FC<{ label: string; value: string; highlight?: boolean }> = ({ label, value, highlight }) => (
+  <div className={`p-3 rounded-lg text-center ${
+    highlight
+      ? 'bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-700/60'
+      : 'bg-white/60 dark:bg-slate-800/60'
+  }`}>
+    <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">{label}</div>
+    <div className={`text-lg font-bold ${highlight ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-700 dark:text-slate-200'}`}>
+      {value}
+    </div>
+  </div>
+);
+
+
+function sectorNameOf(sectors: TopEntry[], prefix: string): string {
+  return sectors.find(s => s.prefix === prefix)?.name || '';
+}
 
 const TopTable: React.FC<{ icon: React.ReactNode; title: string; rows: TopEntry[] }> = ({ icon, title, rows }) => (
   <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">

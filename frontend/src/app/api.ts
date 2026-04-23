@@ -58,6 +58,7 @@ export interface TopEntry {
   name?: string;
   contracts: number;
   total_sum: number;
+  share_pct?: number;
 }
 
 export interface TimeSeriesEntry {
