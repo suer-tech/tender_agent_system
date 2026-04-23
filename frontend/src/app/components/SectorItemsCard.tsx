@@ -1,14 +1,6 @@
-import React, { useState } from 'react';
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-} from 'recharts';
-import { Package } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Package, Loader2, AlertTriangle, Trophy } from 'lucide-react';
 import { TopItemEntry } from '../api';
-
-const TABLEAU10 = [
-  '#4E79A7', '#F28E2B', '#E15759', '#76B7B2', '#59A14F',
-  '#EDC948', '#B07AA1', '#FF9DA7', '#9C755F', '#BAB0AC',
-];
 
 type Metric = 'sum' | 'contracts';
 
@@ -22,72 +14,98 @@ const fmtMln = (v: number | null | undefined) =>
 const fmtPct = (v: number | null | undefined) =>
   v == null ? '—' : `${v.toFixed(1)}%`;
 
+const ruPlural = (n: number, forms: [string, string, string]) => {
+  const n10 = n % 10, n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return forms[0];
+  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return forms[1];
+  return forms[2];
+};
+
 interface Props {
   items: TopItemEntry[];
+  status: 'idle' | 'loading' | 'ok' | 'error';
   /** Заголовок отрасли (например, «21 — Фармацевтика») для подписи в шапке. */
   sectorLabel: string;
 }
 
-/** Топ конкретных позиций (товаров/услуг) внутри выбранной отрасли.
- *  Метрика переключается: по объёму ₽ или по числу контрактов.
- *  Группировка по полному коду ОКПД2 — это и есть «один товар/услуга».
+/** Топ позиций (товаров/услуг) внутри выбранной отрасли — в виде лидерборда.
+ *  Намеренно не bar-chart: рядом стоит SectorsCard (тоже бары), и два бара
+ *  визуально сливаются. Лидерборд другой жанр — список карточек с рангом,
+ *  кодом, полным названием, тонкой прогресс-полоской доли и метриками.
  */
-export const SectorItemsCard: React.FC<Props> = ({ items, sectorLabel }) => {
+export const SectorItemsCard: React.FC<Props> = ({ items, status, sectorLabel }) => {
+  // ВАЖНО: все хуки вызываем безусловно ДО любых early-return,
+  // иначе React падает с error #310 при смене статуса (loading → ok).
   const [metric, setMetric] = useState<Metric>('sum');
 
-  if (items.length === 0) {
-    return (
-      <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
-        <Header sectorLabel={sectorLabel} metric={metric} onMetric={setMetric} />
-        <div className="text-sm text-slate-500 py-8 text-center">
-          В этой отрасли нет позиций за выбранный период
+  const ranked = useMemo(() => {
+    const totalContracts = items.reduce((s, e) => s + e.contracts, 0);
+    const totalSum = items.reduce((s, e) => s + e.total_sum, 0);
+    const sorted = [...items].sort((a, b) =>
+      metric === 'sum'
+        ? b.total_sum - a.total_sum
+        : b.contracts - a.contracts
+    );
+    return sorted.map((e, i) => ({
+      ...e,
+      _rank: i + 1,
+      _share: metric === 'sum'
+        ? (totalSum ? (e.total_sum / totalSum) * 100 : 0)
+        : (totalContracts ? (e.contracts / totalContracts) * 100 : 0),
+    }));
+  }, [items, metric]);
+
+  let body: React.ReactNode;
+  if (status === 'loading') {
+    body = (
+      <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
+        <Loader2 className="w-4 h-4 animate-spin" /> Загружаю позиции…
+      </div>
+    );
+  } else if (status === 'error') {
+    body = (
+      <div className="flex flex-col items-center justify-center gap-2 py-8 text-sm text-amber-700 dark:text-amber-400">
+        <AlertTriangle className="w-5 h-5" />
+        <div className="text-center">
+          <div className="font-medium">Не удалось загрузить позиции</div>
+          <div className="text-xs text-slate-500 mt-1">
+            Возможно, бэкенд не перезапущен после обновления
+            (endpoint /api/market/top-items-in-sector). Проверь Network в DevTools.
+          </div>
         </div>
+      </div>
+    );
+  } else if (ranked.length === 0) {
+    body = (
+      <div className="text-sm text-slate-500 py-8 text-center">
+        В этой отрасли нет позиций за выбранный период
+      </div>
+    );
+  } else {
+    body = (
+      <div className="divide-y divide-slate-100 dark:divide-slate-700/60">
+        {ranked.map(it => <ItemRow key={it.code} item={it} metric={metric} />)}
       </div>
     );
   }
 
-  const dataKey = metric === 'sum' ? 'total_sum' : 'contracts';
-  const sorted = [...items].sort((a, b) =>
-    (b[dataKey] as number) - (a[dataKey] as number));
-
-  // Если переключились на «контракты», доли в API про объём — пересчитаем под контракты.
-  const totalContracts = items.reduce((s, e) => s + e.contracts, 0);
-  const data = sorted.map((e, i) => ({
-    ...e,
-    label: trimLabel(e.code, e.name),
-    _color: TABLEAU10[i % TABLEAU10.length],
-    _share: metric === 'sum'
-      ? e.share_pct
-      : (totalContracts ? (e.contracts / totalContracts) * 100 : 0),
-  }));
-
   return (
-    <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
-      <Header sectorLabel={sectorLabel} metric={metric} onMetric={setMetric} />
-      <ResponsiveContainer width="100%" height={Math.max(280, data.length * 32 + 40)}>
-        <BarChart data={data} layout="vertical"
-                  margin={{ top: 4, right: 70, left: 0, bottom: 4 }}>
-          <XAxis type="number" fontSize={11}
-                 tickFormatter={v => metric === 'sum' ? fmtMln(v) : v.toLocaleString('ru-RU')} />
-          <YAxis dataKey="label" type="category" fontSize={11.5} width={300}
-                 tick={{ fill: 'currentColor' }}
-                 className="text-slate-700 dark:text-slate-300" />
-          <Tooltip cursor={{ fill: 'rgba(99,102,241,0.06)' }}
-                   content={<ItemTooltip metric={metric} />} />
-          <Bar dataKey={dataKey} radius={[0, 4, 4, 0]}
-               label={{ position: 'right',
-                        formatter: (v: any, e: any) => {
-                          const pct = (e && e._share != null) ? e._share : null;
-                          return pct != null ? `${pct.toFixed(1)}%` : '';
-                        },
-                        fontSize: 11, fill: '#64748b' }}>
-            {data.map((d, i) => <Cell key={i} fill={d._color} />)}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
+    <CardShell sectorLabel={sectorLabel} metric={metric} onMetric={setMetric}>
+      {body}
+    </CardShell>
   );
 };
+
+
+const CardShell: React.FC<{
+  sectorLabel: string; metric: Metric; onMetric: (m: Metric) => void;
+  children: React.ReactNode;
+}> = ({ sectorLabel, metric, onMetric, children }) => (
+  <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+    <Header sectorLabel={sectorLabel} metric={metric} onMetric={onMetric} />
+    {children}
+  </div>
+);
 
 
 const Header: React.FC<{ sectorLabel: string; metric: Metric; onMetric: (m: Metric) => void }> = ({
@@ -129,39 +147,61 @@ const MetricToggle: React.FC<{ metric: Metric; onChange: (m: Metric) => void }> 
 );
 
 
-const ItemTooltip: React.FC<any> = ({ active, payload, metric }) => {
-  if (!active || !payload || !payload.length) return null;
-  const e = payload[0].payload;
+const ItemRow: React.FC<{
+  item: TopItemEntry & { _rank: number; _share: number };
+  metric: Metric;
+}> = ({ item, metric }) => {
+  const isMedal = item._rank <= 3;
+  const medalCls =
+    item._rank === 1 ? 'bg-amber-100 text-amber-700 ring-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:ring-amber-800/40' :
+    item._rank === 2 ? 'bg-slate-200 text-slate-700 ring-slate-300 dark:bg-slate-700 dark:text-slate-200 dark:ring-slate-600' :
+    item._rank === 3 ? 'bg-orange-100 text-orange-700 ring-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:ring-orange-800/40' :
+                       'bg-slate-50 text-slate-500 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700';
+
   return (
-    <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg px-3 py-2 text-xs max-w-md">
-      <div className="font-semibold text-slate-800 dark:text-slate-100 mb-1">
-        {e.code}
+    <div className="py-3 first:pt-1 last:pb-1 flex gap-3 hover:bg-slate-50/60 dark:hover:bg-slate-700/20 -mx-2 px-2 rounded-lg transition-colors">
+      {/* Rank — крупный, медальный для топ-3 */}
+      <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center font-bold text-base ring-1 ${medalCls}`}
+           title={`${item._rank}-е место`}>
+        {isMedal ? <span className="flex items-center gap-0.5"><Trophy className="w-3 h-3" />{item._rank}</span> : item._rank}
       </div>
-      <div className="text-slate-600 dark:text-slate-300 mb-1.5">
-        {e.name || '—'}
-      </div>
-      <div className="space-y-0.5 border-t border-slate-200 dark:border-slate-700 pt-1.5">
-        <div className="text-slate-600 dark:text-slate-300">
-          Объём: <span className="font-semibold text-slate-800 dark:text-slate-100">{fmtMln(e.total_sum)}</span>
+
+      {/* Основное содержимое */}
+      <div className="flex-1 min-w-0">
+        {/* Шапка: код-бейдж + название */}
+        <div className="flex items-baseline gap-2 mb-1">
+          <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 shrink-0">
+            {item.code}
+          </span>
+          <div className="text-sm text-slate-800 dark:text-slate-100 leading-snug">
+            {item.name || '—'}
+          </div>
         </div>
-        <div className="text-slate-600 dark:text-slate-300">
-          Контрактов: <span className="font-semibold text-slate-800 dark:text-slate-100">{e.contracts.toLocaleString('ru-RU')}</span>
+
+        {/* Прогресс-полоска доли (тонкая, не доминирует) */}
+        <div className="flex items-center gap-2 mb-1">
+          <div className="flex-1 h-1.5 bg-slate-100 dark:bg-slate-700/60 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-indigo-500 dark:bg-indigo-400 rounded-full transition-all"
+              style={{ width: `${Math.min(100, Math.max(2, item._share))}%` }}
+            />
+          </div>
+          <div className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 w-12 text-right shrink-0">
+            {fmtPct(item._share)}
+          </div>
         </div>
-        <div className="text-slate-600 dark:text-slate-300">
-          Доля в отрасли ({metric === 'sum' ? 'по ₽' : 'по контрактам'}):{' '}
-          <span className="font-semibold text-slate-800 dark:text-slate-100">{fmtPct(e._share)}</span>
+
+        {/* Метрики — в зависимости от выбранного режима меняется акцент */}
+        <div className="flex items-center gap-3 text-xs">
+          <span className={metric === 'sum' ? 'text-slate-800 dark:text-slate-100 font-semibold' : 'text-slate-500'}>
+            {fmtMln(item.total_sum)}
+          </span>
+          <span className="text-slate-300 dark:text-slate-600">·</span>
+          <span className={metric === 'contracts' ? 'text-slate-800 dark:text-slate-100 font-semibold' : 'text-slate-500'}>
+            {item.contracts.toLocaleString('ru-RU')} {ruPlural(item.contracts, ['контракт', 'контракта', 'контрактов'])}
+          </span>
         </div>
       </div>
     </div>
   );
 };
-
-
-/** Лейбл для оси Y: «21.20.10.194 · Препараты противоопухолевые …»,
- *  обрезаем длинное название чтобы влезло в 300px. */
-function trimLabel(code: string, name: string | null): string {
-  const n = (name || '—').trim();
-  const max = 42;
-  const short = n.length > max ? n.slice(0, max - 1) + '…' : n;
-  return `${code} · ${short}`;
-}

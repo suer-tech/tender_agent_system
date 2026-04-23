@@ -47,6 +47,7 @@ export const MarketPage: React.FC = () => {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [sectors, setSectors] = useState<TopEntry[]>([]);
   const [items, setItems] = useState<TopItemEntry[]>([]);
+  const [itemsStatus, setItemsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [customers, setCustomers] = useState<TopEntry[]>([]);
   const [suppliers, setSuppliers] = useState<TopEntry[]>([]);
   const [timeseries, setTimeseries] = useState<TimeSeriesEntry[]>([]);
@@ -64,24 +65,32 @@ export const MarketPage: React.FC = () => {
       from_date: fromDate, to_date: toDate,
       region: region || undefined, limit: 30,
     };
-    // Топ позиций — только когда выбрана отрасль (иначе бессмысленно).
-    const itemsPromise = okpd2
-      ? api.topItemsInSector({
-          from_date: fromDate, to_date: toDate, okpd2,
-          region: region || undefined, limit: 15,
-        })
-      : Promise.resolve([] as TopItemEntry[]);
+    // Топ позиций — отдельный запрос со своим статусом, чтобы 404/500
+    // на этом endpoint не обнулял остальной дашборд и был видим в UI.
+    if (okpd2) {
+      setItemsStatus('loading');
+      api.topItemsInSector({
+        from_date: fromDate, to_date: toDate, okpd2,
+        region: region || undefined, limit: 15,
+      })
+        .then(it => { setItems(it); setItemsStatus('ok'); })
+        .catch(e => {
+          console.error('[market] top-items failed', e);
+          setItems([]); setItemsStatus('error');
+        });
+    } else {
+      setItems([]); setItemsStatus('idle');
+    }
 
     try {
-      const [ov, sc, it, cs, sp, ts] = await Promise.all([
+      const [ov, sc, cs, sp, ts] = await Promise.all([
         api.marketOverview(params),
         api.topSectors(sectorsParams),
-        itemsPromise,
         api.topCustomers({ ...params, limit: 10 }),
         api.topSuppliers({ ...params, limit: 10 }),
         api.timeseries(params),
       ]);
-      setOverview(ov); setSectors(sc); setItems(it);
+      setOverview(ov); setSectors(sc);
       setCustomers(cs); setSuppliers(sp); setTimeseries(ts);
     } catch (e) {
       console.error('[market] load failed', e);
@@ -162,9 +171,17 @@ export const MarketPage: React.FC = () => {
           </div>
         )}
 
-        {/* Ряд 1: динамика по месяцам + скидки на торгах */}
+        {/* Ряд 1: топ отраслей — точка входа в drill-down */}
+        <div className="mb-6">
+          <SectorsCard sectors={sectors} selectedOkpd2={okpd2} onSelect={setOkpd2} />
+        </div>
+
+        {/* Ряд 2: динамика + скидки — обе карточки фильтруются выбранной отраслью */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          <ChartCard title="Динамика контрактов по месяцам">
+          <ChartCard
+            title="Динамика контрактов по месяцам"
+            badge={okpd2 ? sectorBadgeLabel(okpd2, sectors) : undefined}
+          >
             {timeseries.length > 0 ? (
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={timeseries}>
@@ -183,19 +200,18 @@ export const MarketPage: React.FC = () => {
             )}
           </ChartCard>
 
-          <DiscountsCard overview={overview} />
+          <DiscountsCard
+            overview={overview}
+            badge={okpd2 ? sectorBadgeLabel(okpd2, sectors) : undefined}
+          />
         </div>
 
-        {/* Ряд 2: топ отраслей на всю ширину */}
-        <div className="mb-6">
-          <SectorsCard sectors={sectors} selectedOkpd2={okpd2} onSelect={setOkpd2} />
-        </div>
-
-        {/* Ряд 2.5: drill-down — позиции внутри выбранной отрасли */}
+        {/* Ряд 3: позиции внутри выбранной отрасли */}
         {okpd2 && (
           <div className="mb-6">
             <SectorItemsCard
               items={items}
+              status={itemsStatus}
               sectorLabel={`${okpd2}${sectorNameOf(sectors, okpd2) ? ` — ${sectorNameOf(sectors, okpd2)}` : ''}`}
             />
           </div>
@@ -220,20 +236,36 @@ const StatCard: React.FC<{ label: string; value: string; hint?: string }> = ({ l
   </div>
 );
 
-const ChartCard: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+const ChartCard: React.FC<{
+  title: string; badge?: string; children: React.ReactNode;
+}> = ({ title, badge, children }) => (
   <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
-    <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">{title}</div>
+    <div className="flex items-center gap-2 mb-3 flex-wrap">
+      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">{title}</div>
+      {badge && <SectorBadge label={badge} />}
+    </div>
     {children}
   </div>
 );
 
 
-const DiscountsCard: React.FC<{ overview: MarketOverview | null }> = ({ overview }) => {
+const SectorBadge: React.FC<{ label: string }> = ({ label }) => (
+  <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-900/40 border border-indigo-200 dark:border-indigo-800/50 text-xs text-indigo-700 dark:text-indigo-300 font-medium max-w-full truncate"
+        title={`Данные показаны по отрасли ${label}`}>
+    {label}
+  </span>
+);
+
+
+const DiscountsCard: React.FC<{ overview: MarketOverview | null; badge?: string }> = ({ overview, badge }) => {
   const has = overview && overview.discounts_sample > 0;
   return (
     <div className="p-4 bg-emerald-50/40 dark:bg-emerald-900/15 rounded-xl border border-emerald-200 dark:border-emerald-800/40 shadow-sm flex flex-col">
-      <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300 mb-3">
-        <TrendingDown className="w-4 h-4" /> Скидки на торгах
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+          <TrendingDown className="w-4 h-4" /> Скидки на торгах
+        </div>
+        {badge && <SectorBadge label={badge} />}
       </div>
       {has ? (
         <>
@@ -272,6 +304,11 @@ const PercentileTile: React.FC<{ label: string; value: string; highlight?: boole
 
 function sectorNameOf(sectors: TopEntry[], prefix: string): string {
   return sectors.find(s => s.prefix === prefix)?.name || '';
+}
+
+function sectorBadgeLabel(prefix: string, sectors: TopEntry[]): string {
+  const name = sectorNameOf(sectors, prefix);
+  return name ? `${prefix} — ${name}` : prefix;
 }
 
 const TopTable: React.FC<{ icon: React.ReactNode; title: string; rows: TopEntry[] }> = ({ icon, title, rows }) => (
