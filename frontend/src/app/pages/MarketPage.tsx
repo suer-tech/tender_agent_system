@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -8,10 +8,15 @@ import {
   api, REGIONS, OKPD2_TOP,
   MarketOverview, TopEntry, TopItemEntry, TimeSeriesEntry,
 } from '../api';
-import { ArrowLeft, TrendingDown, Building2, Factory, BarChart3, Loader2, Search } from 'lucide-react';
+import { ArrowLeft, TrendingDown, Building2, Factory, BarChart3, Search, PiggyBank } from 'lucide-react';
 import { useAppState } from '../store';
 import { SectorsCard } from '../components/SectorsCard';
 import { SectorItemsCard } from '../components/SectorItemsCard';
+import {
+  TopProgressBar, Refreshing, AnalyticsLoader, SkeletonOverlayLoader,
+  StatTilesSkeleton, LineChartSkeleton, DiscountsCardSkeleton,
+  SectorsCardSkeleton, SectorItemsCardSkeleton, TopTableSkeleton,
+} from '../components/Skeletons';
 
 const fmtMln = (v: number | null | undefined) =>
   v == null ? '—' : v >= 1_000_000_000
@@ -22,9 +27,14 @@ const fmtMln = (v: number | null | undefined) =>
 
 const fmtPct = (v: number | null | undefined) => v == null ? '—' : `${v.toFixed(1)}%`;
 
-// По дефолту — весь апрель 2026 (наши данные)
-const DEFAULT_FROM = '2026-04-01';
-const DEFAULT_TO = '2026-04-30';
+// По дефолту — последние 12 месяцев (скользящее окно от сегодня).
+// Считаем один раз при монтировании страницы; ISO YYYY-MM-DD без TZ-сдвига.
+const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+const today = new Date();
+const yearAgo = new Date(today);
+yearAgo.setFullYear(today.getFullYear() - 1);
+const DEFAULT_FROM = isoDate(yearAgo);
+const DEFAULT_TO = isoDate(today);
 
 // Кастомный select: отключаем нативную стрелку (appearance-none) и рисуем свою справа
 // через background-image (inline style), чтобы отступ был предсказуемый.
@@ -51,10 +61,43 @@ export const MarketPage: React.FC = () => {
   const [customers, setCustomers] = useState<TopEntry[]>([]);
   const [suppliers, setSuppliers] = useState<TopEntry[]>([]);
   const [timeseries, setTimeseries] = useState<TimeSeriesEntry[]>([]);
-  const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // Per-section loading flags. Карточки появляются прогрессивно по мере
+  // прихода ответов, а не «всё разом или ничего». Каждый запрос сам
+  // выставляет/снимает свой флаг.
+  const [load_overview, setLoadOverview] = useState(false);
+  const [load_sectors, setLoadSectors] = useState(false);
+  const [load_items, setLoadItems] = useState(false);
+  const [load_customers, setLoadCustomers] = useState(false);
+  const [load_suppliers, setLoadSuppliers] = useState(false);
+  const [load_timeseries, setLoadTimeseries] = useState(false);
+  const anyLoading =
+    load_overview || load_sectors || load_items ||
+    load_customers || load_suppliers || load_timeseries;
+
+  // Прогресс первой загрузки: считаем сколько секций уже не в loading.
+  // Items включаем в общее число только когда выбрана отрасль (в остальных
+  // случаях этой секции просто нет).
+  const flags = okpd2
+    ? [load_overview, load_sectors, load_items, load_customers, load_suppliers, load_timeseries]
+    : [load_overview, load_sectors, load_customers, load_suppliers, load_timeseries];
+  const totalSections = flags.length;
+  const doneSections = flags.filter(f => !f).length;
+
+  // «Первая загрузка завершена» = когда anyLoading хоть раз перешёл из
+  // true в false. Делаем это через отслеживание перехода, а не через
+  // «есть ли данные в overview», иначе лоадер закрывается на первом ответе.
+  const [firstLoadDone, setFirstLoadDone] = useState(false);
+  const prevAnyLoadingRef = useRef(false);
+  useEffect(() => {
+    if (prevAnyLoadingRef.current && !anyLoading && !firstLoadDone) {
+      setFirstLoadDone(true);
+    }
+    prevAnyLoadingRef.current = anyLoading;
+  }, [anyLoading, firstLoadDone]);
+  const isFirstLoad = !firstLoadDone;
+
+  const load = useCallback(() => {
     const params = {
       from_date: fromDate, to_date: toDate,
       okpd2: okpd2 || undefined, region: region || undefined,
@@ -65,9 +108,41 @@ export const MarketPage: React.FC = () => {
       from_date: fromDate, to_date: toDate,
       region: region || undefined, limit: 30,
     };
+
+    setLoadOverview(true);
+    api.marketOverview(params)
+      .then(setOverview)
+      .catch(e => console.error('[market] overview failed', e))
+      .finally(() => setLoadOverview(false));
+
+    setLoadSectors(true);
+    api.topSectors(sectorsParams)
+      .then(setSectors)
+      .catch(e => console.error('[market] sectors failed', e))
+      .finally(() => setLoadSectors(false));
+
+    setLoadCustomers(true);
+    api.topCustomers({ ...params, limit: 10 })
+      .then(setCustomers)
+      .catch(e => console.error('[market] customers failed', e))
+      .finally(() => setLoadCustomers(false));
+
+    setLoadSuppliers(true);
+    api.topSuppliers({ ...params, limit: 10 })
+      .then(setSuppliers)
+      .catch(e => console.error('[market] suppliers failed', e))
+      .finally(() => setLoadSuppliers(false));
+
+    setLoadTimeseries(true);
+    api.timeseries(params)
+      .then(setTimeseries)
+      .catch(e => console.error('[market] timeseries failed', e))
+      .finally(() => setLoadTimeseries(false));
+
     // Топ позиций — отдельный запрос со своим статусом, чтобы 404/500
     // на этом endpoint не обнулял остальной дашборд и был видим в UI.
     if (okpd2) {
+      setLoadItems(true);
       setItemsStatus('loading');
       api.topItemsInSector({
         from_date: fromDate, to_date: toDate, okpd2,
@@ -77,25 +152,10 @@ export const MarketPage: React.FC = () => {
         .catch(e => {
           console.error('[market] top-items failed', e);
           setItems([]); setItemsStatus('error');
-        });
+        })
+        .finally(() => setLoadItems(false));
     } else {
-      setItems([]); setItemsStatus('idle');
-    }
-
-    try {
-      const [ov, sc, cs, sp, ts] = await Promise.all([
-        api.marketOverview(params),
-        api.topSectors(sectorsParams),
-        api.topCustomers({ ...params, limit: 10 }),
-        api.topSuppliers({ ...params, limit: 10 }),
-        api.timeseries(params),
-      ]);
-      setOverview(ov); setSectors(sc);
-      setCustomers(cs); setSuppliers(sp); setTimeseries(ts);
-    } catch (e) {
-      console.error('[market] load failed', e);
-    } finally {
-      setLoading(false);
+      setItems([]); setItemsStatus('idle'); setLoadItems(false);
     }
   }, [okpd2, region, fromDate, toDate]);
 
@@ -123,9 +183,15 @@ export const MarketPage: React.FC = () => {
                 <span>Поиск в чате…</span>
               </Link>
             )}
-            {loading && <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />}
           </div>
         </div>
+
+        <TopProgressBar visible={anyLoading} />
+        <AnalyticsLoader
+          visible={isFirstLoad && anyLoading}
+          done={doneSections}
+          total={totalSections}
+        />
 
         {/* Filters */}
         <div className="mb-6 p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
@@ -161,66 +227,111 @@ export const MarketPage: React.FC = () => {
         </div>
 
         {/* Overview stats */}
-        {overview && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-            <StatCard label="Контрактов" value={overview.contracts_count.toLocaleString('ru-RU')} />
-            <StatCard label="Объём" value={fmtMln(overview.total_sum_rub)} />
-            <StatCard label="Заказчиков" value={overview.unique_customers.toLocaleString('ru-RU')} />
-            <StatCard label="Поставщиков" value={overview.unique_suppliers.toLocaleString('ru-RU')} />
-            <StatCard label="HHI" value={overview.hhi?.toFixed(0) ?? '—'} hint={hhiHint(overview.hhi)} />
-          </div>
-        )}
+        {overview ? (
+          <Refreshing loading={load_overview}>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+              <StatCard label="Контрактов" value={overview.contracts_count.toLocaleString('ru-RU')} />
+              <StatCard label="Объём" value={fmtMln(overview.total_sum_rub)} />
+              <StatCard label="Заказчиков" value={overview.unique_customers.toLocaleString('ru-RU')} />
+              <StatCard label="Поставщиков" value={overview.unique_suppliers.toLocaleString('ru-RU')} />
+              <StatCard label="HHI" value={overview.hhi?.toFixed(0) ?? '—'} hint={hhiHint(overview.hhi)} />
+            </div>
+          </Refreshing>
+        ) : load_overview ? (
+          <StatTilesSkeleton />
+        ) : null}
 
         {/* Ряд 1: топ отраслей — точка входа в drill-down */}
         <div className="mb-6">
-          <SectorsCard sectors={sectors} selectedOkpd2={okpd2} onSelect={setOkpd2} />
+          {sectors.length === 0 && load_sectors ? (
+            <SectorsCardSkeleton />
+          ) : (
+            <Refreshing loading={load_sectors}>
+              <SectorsCard sectors={sectors} selectedOkpd2={okpd2} onSelect={setOkpd2} />
+            </Refreshing>
+          )}
         </div>
 
         {/* Ряд 2: динамика + скидки — обе карточки фильтруются выбранной отраслью */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-          <ChartCard
-            title="Динамика контрактов по месяцам"
-            badge={okpd2 ? sectorBadgeLabel(okpd2, sectors) : undefined}
-          >
-            {timeseries.length > 0 ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={timeseries}>
-                  <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                  <XAxis dataKey="month" fontSize={11} />
-                  <YAxis fontSize={11} />
-                  <Tooltip />
-                  <Legend />
-                  <Line type="monotone" dataKey="contracts" stroke="#6366f1" name="Контрактов" />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-[220px] flex items-center justify-center text-sm text-slate-500">
-                Нет данных за выбранный период
-              </div>
-            )}
-          </ChartCard>
+          {timeseries.length === 0 && load_timeseries ? (
+            <LineChartSkeleton />
+          ) : (
+            <Refreshing loading={load_timeseries}>
+              <ChartCard
+                title="Динамика контрактов по месяцам"
+                badge={okpd2 ? sectorBadgeLabel(okpd2, sectors) : undefined}
+              >
+                {timeseries.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={220}>
+                    <LineChart data={timeseries}>
+                      <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                      <XAxis dataKey="month" fontSize={11} />
+                      <YAxis fontSize={11} />
+                      <Tooltip />
+                      <Legend />
+                      <Line type="monotone" dataKey="contracts" stroke="#6366f1" name="Контрактов" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-[220px] flex items-center justify-center text-sm text-slate-500">
+                    Нет данных за выбранный период
+                  </div>
+                )}
+              </ChartCard>
+            </Refreshing>
+          )}
 
-          <DiscountsCard
-            overview={overview}
-            badge={okpd2 ? sectorBadgeLabel(okpd2, sectors) : undefined}
-          />
+          {!overview && load_overview ? (
+            <DiscountsCardSkeleton />
+          ) : (
+            <Refreshing loading={load_overview}>
+              <DiscountsCard
+                overview={overview}
+                badge={okpd2 ? sectorBadgeLabel(okpd2, sectors) : undefined}
+              />
+            </Refreshing>
+          )}
         </div>
 
         {/* Ряд 3: позиции внутри выбранной отрасли */}
         {okpd2 && (
           <div className="mb-6">
-            <SectorItemsCard
-              items={items}
-              status={itemsStatus}
-              sectorLabel={`${okpd2}${sectorNameOf(sectors, okpd2) ? ` — ${sectorNameOf(sectors, okpd2)}` : ''}`}
-            />
+            {items.length === 0 && load_items ? (
+              <SkeletonOverlayLoader loading text="Загружаю позиции…">
+                <SectorItemsCardSkeleton />
+              </SkeletonOverlayLoader>
+            ) : (
+              <Refreshing loading={load_items}>
+                <SectorItemsCard
+                  items={items}
+                  status={itemsStatus}
+                  sectorLabel={`${okpd2}${sectorNameOf(sectors, okpd2) ? ` — ${sectorNameOf(sectors, okpd2)}` : ''}`}
+                  fromDate={fromDate}
+                  toDate={toDate}
+                  region={region}
+                />
+              </Refreshing>
+            )}
           </div>
         )}
 
-        {/* Ряд 3: топы заказчиков и поставщиков */}
+        {/* Ряд 4: топы заказчиков и поставщиков */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <TopTable icon={<Building2 className="w-5 h-5" />} title="Топ заказчиков" rows={customers} />
-          <TopTable icon={<Factory className="w-5 h-5" />} title="Топ поставщиков" rows={suppliers} />
+          {customers.length === 0 && load_customers ? (
+            <TopTableSkeleton />
+          ) : (
+            <Refreshing loading={load_customers}>
+              <TopTable icon={<Building2 className="w-5 h-5" />} title="Топ заказчиков" rows={customers} />
+            </Refreshing>
+          )}
+          {suppliers.length === 0 && load_suppliers ? (
+            <TopTableSkeleton />
+          ) : (
+            <Refreshing loading={load_suppliers}>
+              <TopTable icon={<Factory className="w-5 h-5" />} title="Топ поставщиков" rows={suppliers} />
+            </Refreshing>
+          )}
         </div>
       </div>
     </div>
@@ -268,16 +379,57 @@ const DiscountsCard: React.FC<{ overview: MarketOverview | null; badge?: string 
         {badge && <SectorBadge label={badge} />}
       </div>
       {has ? (
-        <>
-          <div className="grid grid-cols-3 gap-2 flex-1 content-center">
+        <div className="flex-1 flex flex-col gap-3">
+          {/* Перцентили — структура распределения скидок */}
+          <div className="grid grid-cols-3 gap-2">
             <PercentileTile label="P25" value={fmtPct(overview!.discount_pct_p25)} />
             <PercentileTile label="Медиана" value={fmtPct(overview!.discount_pct_median)} highlight />
             <PercentileTile label="P75" value={fmtPct(overview!.discount_pct_p75)} />
           </div>
-          <div className="text-xs text-slate-500 mt-3">
+
+          {/* Главная цифра — суммарная экономия заказчиков */}
+          {overview!.total_savings_rub > 0 && (
+            <div className="rounded-lg p-3 bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800/40 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-emerald-100 dark:bg-emerald-900/40 flex items-center justify-center shrink-0">
+                <PiggyBank className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-0.5">
+                  Сэкономлено заказчиками
+                </div>
+                <div className="text-xl font-bold text-emerald-700 dark:text-emerald-300 leading-tight">
+                  {fmtMln(overview!.total_savings_rub)}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Конверсия — насколько часто торги дают реальную скидку */}
+          {overview!.discount_rate_pct != null && (
+            <div>
+              <div className="flex items-baseline justify-between text-xs mb-1.5">
+                <span className="text-slate-600 dark:text-slate-300">
+                  Скидка была в{' '}
+                  <span className="font-semibold text-slate-800 dark:text-slate-100">
+                    {overview!.contracts_with_discount.toLocaleString('ru-RU')}
+                  </span>{' '}
+                  из {overview!.contracts_count.toLocaleString('ru-RU')} контрактов
+                </span>
+                <span className="font-semibold text-emerald-700 dark:text-emerald-300">
+                  {fmtPct(overview!.discount_rate_pct)}
+                </span>
+              </div>
+              <div className="h-1.5 bg-emerald-100 dark:bg-emerald-900/30 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-500 dark:bg-emerald-400 rounded-full transition-all"
+                     style={{ width: `${Math.min(100, Math.max(2, overview!.discount_rate_pct!))}%` }} />
+              </div>
+            </div>
+          )}
+
+          <div className="text-xs text-slate-500 mt-auto">
             Выборка {overview!.discounts_sample.toLocaleString('ru-RU')} контрактов со связкой «извещение–контракт»
           </div>
-        </>
+        </div>
       ) : (
         <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
           Недостаточно связок «извещение–контракт» для расчёта
@@ -331,7 +483,7 @@ const TopTable: React.FC<{ icon: React.ReactNode; title: string; rows: TopEntry[
           {rows.map((r, i) => (
             <tr key={r.inn || i} className="border-b border-slate-100 dark:border-slate-800">
               <td className="py-1.5 pr-2 truncate max-w-xs" title={r.name}>
-                <div className="font-medium text-slate-700 dark:text-slate-200 truncate">{r.name || r.inn}</div>
+                <div className="font-medium text-slate-700 dark:text-slate-200 truncate">{r.short_name || r.name || r.inn}</div>
                 <div className="text-slate-400 text-[10px]">ИНН {r.inn}</div>
               </td>
               <td className="text-right py-1.5 text-slate-600 dark:text-slate-300">{r.contracts}</td>

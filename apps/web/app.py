@@ -73,6 +73,21 @@ async def api_top_items_in_sector(from_date: str, to_date: str, okpd2: str,
     return analytics.top_items_in_sector(okpd2, region or None, from_date, to_date, limit)
 
 
+@app.get("/api/market/item-details")
+async def api_item_details(from_date: str, to_date: str, okpd2_code: str,
+                           region: str = "", contracts_limit: int = 20,
+                           contracts_offset: int = 0,
+                           sort_by: str = "date", sort_dir: str = "desc"):
+    """Drill-down: детали одной позиции ОКПД2 — динамика, скидки, контракты с пагинацией.
+
+    sort_by: 'date' | 'price'; sort_dir: 'asc' | 'desc'.
+    """
+    return analytics.item_details(okpd2_code, region or None,
+                                  from_date, to_date,
+                                  contracts_limit, contracts_offset,
+                                  sort_by, sort_dir)
+
+
 @app.get("/api/market/top-customers")
 async def api_top_customers(from_date: str, to_date: str,
                             okpd2: str = "", region: str = "", limit: int = 20):

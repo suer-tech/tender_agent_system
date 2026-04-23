@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from ..storage import eis_analytics
 from ._common import okpd2_prefix_clause
+from .orgnames import short_org_name
 
 
 # Короткие названия 2-значных разделов ОКПД2 (ОК 034-2014).
@@ -105,10 +106,11 @@ def market_overview(okpd2_prefix: str | None, region_code: str | None,
               AND c.supplier_inn IS NOT NULL
         """, okpd2_params + period_params + region_params).fetchone()
 
-        # Медианная скидка (где есть notice-связка)
+        # Медианная скидка + абсолютная экономия (где есть notice-связка)
         disc_rows = c.execute(f"""
             SELECT DISTINCT c.reg_num,
-                   100.0 * (1 - c.contract_price * 1.0 / n.max_price) AS disc
+                   100.0 * (1 - c.contract_price * 1.0 / n.max_price) AS disc,
+                   (n.max_price - c.contract_price) AS savings
             FROM contracts c
             JOIN contract_items ci ON ci.reg_num = c.reg_num
             JOIN notices n ON n.reg_number = c.purchase_number
@@ -116,6 +118,20 @@ def market_overview(okpd2_prefix: str | None, region_code: str | None,
               AND n.max_price > 0 AND c.contract_price IS NOT NULL
         """, okpd2_params + period_params + region_params).fetchall()
         discounts = [r["disc"] for r in disc_rows if r["disc"] is not None]
+        # Реальная скидка = > 0 (равная цена ≈ нет конкуренции).
+        # Экономия — сумма положительных дельт по таким контрактам.
+        positive_deltas = [
+            float(r["savings"]) for r in disc_rows
+            if r["disc"] is not None and r["disc"] > 0 and r["savings"] is not None and r["savings"] > 0
+        ]
+        total_savings = sum(positive_deltas)
+        contracts_with_discount = len(positive_deltas)
+        # Конверсия = доля контрактов с реальной скидкой от общего числа
+        # контрактов сегмента (а не только от выборки со связкой).
+        discount_rate_pct = (
+            100.0 * contracts_with_discount / row["contracts_count"]
+            if row["contracts_count"] else None
+        )
 
         # HHI — концентрация рынка по доле поставщика
         supp_shares = c.execute(f"""
@@ -148,6 +164,9 @@ def market_overview(okpd2_prefix: str | None, region_code: str | None,
         "discount_pct_p25": percentile(discounts, 25),
         "discount_pct_p75": percentile(discounts, 75),
         "discounts_sample": len(discounts),
+        "total_savings_rub": round(total_savings, 2),
+        "contracts_with_discount": contracts_with_discount,
+        "discount_rate_pct": round(discount_rate_pct, 1) if discount_rate_pct is not None else None,
         "hhi": round(hhi, 1) if hhi is not None else None,
     }
 
@@ -252,6 +271,122 @@ def top_items_in_sector(okpd2_prefix: str, region_code: str | None,
     return out
 
 
+def item_details(okpd2_code: str, region_code: str | None,
+                 from_date: str, to_date: str,
+                 contracts_limit: int = 20, contracts_offset: int = 0,
+                 sort_by: str = "date", sort_dir: str = "desc") -> dict:
+    """Детали одной позиции (полный код ОКПД2) для drill-down.
+
+    Возвращает:
+      - okpd2_code, okpd2_name — для шапки
+      - timeseries: контракты и сумма по месяцам
+      - discount_pct_median, discounts_sample: медианная скидка по выборке
+        контрактов с привязкой к notice
+      - contracts: страница последних контрактов (с пагинацией)
+      - contracts_total: общее количество контрактов с этим ОКПД2 за период
+        (нужно для постраничного навигатора)
+    """
+    if not okpd2_code:
+        return {"okpd2_code": "", "okpd2_name": None,
+                "timeseries": [], "discount_pct_median": None,
+                "discounts_sample": 0, "contracts": [], "contracts_total": 0}
+
+    region_sql = "1=1"; region_params: list = []
+    if region_code:
+        region_sql = "c.customer_region = ?"; region_params = [region_code]
+    period_sql, period_params = _period_clause(from_date, to_date)
+
+    with eis_analytics.conn() as c:
+        # Имя позиции — берём наиболее частое из contract_items.
+        name_row = c.execute(f"""
+            SELECT MAX(ci.okpd2_name) AS name
+            FROM contracts c
+            JOIN contract_items ci ON ci.reg_num = c.reg_num
+            WHERE ci.okpd2_code = ? AND {region_sql} AND {period_sql}
+        """, [okpd2_code] + region_params + period_params).fetchone()
+        okpd2_name = name_row["name"] if name_row else None
+
+        # Помесячная динамика — кол-во контрактов и сумма.
+        ts_rows = c.execute(f"""
+            SELECT substr(c.sign_date, 1, 7) AS month,
+                   COUNT(DISTINCT c.reg_num) AS contracts,
+                   COALESCE(SUM(DISTINCT c.contract_price), 0) AS total_sum
+            FROM contracts c
+            JOIN contract_items ci ON ci.reg_num = c.reg_num
+            WHERE ci.okpd2_code = ? AND {region_sql} AND {period_sql}
+              AND c.sign_date IS NOT NULL
+            GROUP BY month ORDER BY month
+        """, [okpd2_code] + region_params + period_params).fetchall()
+
+        # Скидки — по контрактам с привязкой к notice.
+        disc_rows = c.execute(f"""
+            SELECT DISTINCT c.reg_num,
+                   100.0 * (1 - c.contract_price * 1.0 / n.max_price) AS disc
+            FROM contracts c
+            JOIN contract_items ci ON ci.reg_num = c.reg_num
+            JOIN notices n ON n.reg_number = c.purchase_number
+            WHERE ci.okpd2_code = ? AND {region_sql} AND {period_sql}
+              AND n.max_price > 0 AND c.contract_price IS NOT NULL
+        """, [okpd2_code] + region_params + period_params).fetchall()
+        discounts = [r["disc"] for r in disc_rows if r["disc"] is not None]
+
+        # Общее число контрактов (для пагинатора).
+        total_row = c.execute(f"""
+            SELECT COUNT(DISTINCT c.reg_num) AS n
+            FROM contracts c
+            JOIN contract_items ci ON ci.reg_num = c.reg_num
+            WHERE ci.okpd2_code = ? AND {region_sql} AND {period_sql}
+        """, [okpd2_code] + region_params + period_params).fetchone()
+        contracts_total = int(total_row["n"] or 0)
+
+        # Страница контрактов с подробностями (subject + НМЦК + скидка).
+        # Whitelist для ORDER BY — нельзя пускать пользовательский ввод в SQL.
+        sort_columns = {"date": "c.sign_date", "price": "c.contract_price"}
+        order_col = sort_columns.get(sort_by, "c.sign_date")
+        order_dir = "ASC" if sort_dir.lower() == "asc" else "DESC"
+        # NULLs в конце независимо от направления — иначе при ASC сверху появятся
+        # «нулевые» цены, что бесполезно. SQLite поддерживает NULLS LAST с 3.30+.
+        # Стабильный tie-break по reg_num — чтобы пагинация не «дрожала» при
+        # одинаковых значениях основной колонки.
+        contract_rows = c.execute(f"""
+            SELECT DISTINCT
+                   c.reg_num,
+                   c.sign_date,
+                   c.contract_subject,
+                   c.customer_name,
+                   c.supplier_name,
+                   c.contract_price,
+                   n.max_price AS start_price,
+                   CASE WHEN n.max_price > 0 AND c.contract_price IS NOT NULL
+                        THEN 100.0 * (1 - c.contract_price * 1.0 / n.max_price)
+                        ELSE NULL END AS discount_pct
+            FROM contracts c
+            JOIN contract_items ci ON ci.reg_num = c.reg_num
+            LEFT JOIN notices n ON n.reg_number = c.purchase_number
+            WHERE ci.okpd2_code = ? AND {region_sql} AND {period_sql}
+            ORDER BY {order_col} {order_dir} NULLS LAST, c.reg_num DESC
+            LIMIT ? OFFSET ?
+        """, [okpd2_code] + region_params + period_params
+            + [contracts_limit, contracts_offset]).fetchall()
+
+    from ._common import percentile
+    contracts_out = []
+    for r in contract_rows:
+        d = dict(r)
+        d["customer_short_name"] = short_org_name(d.get("customer_name"))
+        d["supplier_short_name"] = short_org_name(d.get("supplier_name"))
+        contracts_out.append(d)
+    return {
+        "okpd2_code": okpd2_code,
+        "okpd2_name": okpd2_name,
+        "timeseries": [dict(r) for r in ts_rows],
+        "discount_pct_median": percentile(discounts, 50),
+        "discounts_sample": len(discounts),
+        "contracts": contracts_out,
+        "contracts_total": contracts_total,
+    }
+
+
 def top_customers(okpd2_prefix: str | None, region_code: str | None,
                   from_date: str, to_date: str, limit: int = 20) -> list[dict]:
     okpd2_sql, okpd2_params = okpd2_prefix_clause(okpd2_prefix or "", "ci.okpd2_code")
@@ -272,7 +407,7 @@ def top_customers(okpd2_prefix: str | None, region_code: str | None,
             GROUP BY c.customer_inn
             ORDER BY total_sum DESC LIMIT ?
         """, okpd2_params + region_params + period_params + [limit]).fetchall()
-    return [dict(r) for r in rows]
+    return [_with_short_name(dict(r)) for r in rows]
 
 
 def top_suppliers(okpd2_prefix: str | None, region_code: str | None,
@@ -295,7 +430,13 @@ def top_suppliers(okpd2_prefix: str | None, region_code: str | None,
             GROUP BY c.supplier_inn
             ORDER BY total_sum DESC LIMIT ?
         """, okpd2_params + region_params + period_params + [limit]).fetchall()
-    return [dict(r) for r in rows]
+    return [_with_short_name(dict(r)) for r in rows]
+
+
+def _with_short_name(d: dict) -> dict:
+    """Добавить `short_name` к dict с полем `name` (для top_customers/suppliers)."""
+    d["short_name"] = short_org_name(d.get("name"))
+    return d
 
 
 def time_series_by_month(okpd2_prefix: str | None, region_code: str | None,

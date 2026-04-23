@@ -49,6 +49,9 @@ export interface MarketOverview {
   discount_pct_p25: number | null;
   discount_pct_p75: number | null;
   discounts_sample: number;
+  total_savings_rub: number;
+  contracts_with_discount: number;
+  discount_rate_pct: number | null;
   hhi: number | null;
 }
 
@@ -56,6 +59,7 @@ export interface TopEntry {
   prefix?: string;
   inn?: string;
   name?: string;
+  short_name?: string;
   contracts: number;
   total_sum: number;
   share_pct?: number;
@@ -67,6 +71,29 @@ export interface TopItemEntry {
   contracts: number;
   total_sum: number;
   share_pct: number;
+}
+
+export interface ContractDetail {
+  reg_num: string;
+  sign_date: string | null;
+  contract_subject: string | null;
+  customer_name: string | null;
+  customer_short_name: string | null;
+  supplier_name: string | null;
+  supplier_short_name: string | null;
+  contract_price: number | null;
+  start_price: number | null;
+  discount_pct: number | null;
+}
+
+export interface ItemDetails {
+  okpd2_code: string;
+  okpd2_name: string | null;
+  timeseries: { month: string; contracts: number; total_sum: number }[];
+  discount_pct_median: number | null;
+  discounts_sample: number;
+  contracts: ContractDetail[];
+  contracts_total: number;
 }
 
 export interface TimeSeriesEntry {
@@ -102,6 +129,9 @@ export const api = {
 
   topItemsInSector: (params: { from_date: string; to_date: string; okpd2: string; region?: string; limit?: number }) =>
     fetchJson<TopItemEntry[]>(`/api/market/top-items-in-sector${q(params)}`),
+
+  itemDetails: (params: { from_date: string; to_date: string; okpd2_code: string; region?: string; contracts_limit?: number; contracts_offset?: number; sort_by?: 'date' | 'price'; sort_dir?: 'asc' | 'desc' }) =>
+    fetchJson<ItemDetails>(`/api/market/item-details${q(params)}`),
 
   topCustomers: (params: { from_date: string; to_date: string; okpd2?: string; region?: string; limit?: number }) =>
     fetchJson<TopEntry[]>(`/api/market/top-customers${q(params)}`),
