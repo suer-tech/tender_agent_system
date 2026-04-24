@@ -137,13 +137,19 @@ def mark_batch_status(batch_id: int, status: str, **fields):
         c.execute(f"UPDATE download_batches SET {', '.join(cols)} WHERE id=?", vals)
 
 
-def list_pending_batches(limit: int | None = None) -> list[dict]:
-    q = "SELECT * FROM download_batches WHERE status IN ('pending','error') ORDER BY id"
-    args: tuple = ()
+def list_pending_batches(limit: int | None = None,
+                         exact_date: str | None = None) -> list[dict]:
+    q = "SELECT * FROM download_batches WHERE status IN ('pending','error')"
+    args: list = []
+    if exact_date:
+        q += " AND exact_date = ?"
+        args.append(exact_date)
+    q += " ORDER BY id"
     if limit:
-        q += " LIMIT ?"; args = (limit,)
+        q += " LIMIT ?"
+        args.append(limit)
     with conn() as c:
-        return [dict(r) for r in c.execute(q, args).fetchall()]
+        return [dict(r) for r in c.execute(q, tuple(args)).fetchall()]
 
 
 def save_batch_result(batch_id: int, status: str, urls: list[str], request_id: str | None,
@@ -164,15 +170,20 @@ def save_batch_result(batch_id: int, status: str, urls: list[str], request_id: s
             )
 
 
-def list_pending_archives(limit: int | None = None) -> list[dict]:
+def list_pending_archives(limit: int | None = None,
+                          exact_date: str | None = None) -> list[dict]:
     q = """SELECT a.id, a.url, a.batch_id, b.region_code, b.subsystem, b.doc_type, b.exact_date
            FROM archives a JOIN download_batches b ON a.batch_id=b.id
            WHERE a.local_path IS NULL"""
-    args: tuple = ()
+    args: list = []
+    if exact_date:
+        q += " AND b.exact_date = ?"
+        args.append(exact_date)
     if limit:
-        q += " LIMIT ?"; args = (limit,)
+        q += " LIMIT ?"
+        args.append(limit)
     with conn() as c:
-        return [dict(r) for r in c.execute(q, args).fetchall()]
+        return [dict(r) for r in c.execute(q, tuple(args)).fetchall()]
 
 
 def mark_archive_downloaded(archive_id: int, local_path: str, size_bytes: int,
@@ -184,6 +195,48 @@ def mark_archive_downloaded(archive_id: int, local_path: str, size_bytes: int,
                WHERE id=?""",
             (local_path, size_bytes, sha256, archive_id),
         )
+
+
+def list_dates_needing_work() -> list[str]:
+    """Dates with pending/error batches OR undownloaded archives, sorted ascending."""
+    with conn() as c:
+        rows = c.execute(
+            """SELECT DISTINCT d FROM (
+                SELECT exact_date AS d FROM download_batches
+                WHERE status IN ('pending','error')
+                UNION
+                SELECT b.exact_date AS d FROM archives a
+                JOIN download_batches b ON a.batch_id = b.id
+                WHERE a.local_path IS NULL
+            ) ORDER BY d"""
+        ).fetchall()
+        return [r[0] for r in rows]
+
+
+def reset_stale_archives(exact_date: str) -> int:
+    """Delete undownloaded archive rows for a date, reset their batches to pending.
+    Already-downloaded archives are kept. Returns count of deleted rows."""
+    with conn() as c:
+        stale_batch_ids = [r[0] for r in c.execute(
+            """SELECT DISTINCT a.batch_id FROM archives a
+               JOIN download_batches b ON a.batch_id = b.id
+               WHERE b.exact_date = ? AND a.local_path IS NULL""",
+            (exact_date,)
+        ).fetchall()]
+        if not stale_batch_ids:
+            return 0
+        ph = ",".join("?" * len(stale_batch_ids))
+        deleted = c.execute(
+            f"DELETE FROM archives WHERE batch_id IN ({ph}) AND local_path IS NULL",
+            stale_batch_ids
+        ).rowcount
+        c.execute(
+            f"""UPDATE download_batches
+                SET status='pending', archive_count=0, error=NULL
+                WHERE id IN ({ph}) AND status != 'pending'""",
+            stale_batch_ids
+        )
+        return deleted
 
 
 TOP10_REGIONS = [
@@ -244,10 +297,21 @@ def _month_range(year: int, month: int) -> list[str]:
 # Пресеты периодов. Ключ → (год, список месяцев).
 # При добавлении новых периодов — только дописать сюда, код ниже подхватит.
 _MONTH_PRESETS: dict[str, tuple[int, list[int]]] = {
+    # 2025
+    "top10-jul2025": (2025, [7]),
+    "top10-aug2025": (2025, [8]),
+    "top10-sep2025": (2025, [9]),
+    "top10-oct2025": (2025, [10]),
+    "top10-nov2025": (2025, [11]),
+    "top10-dec2025": (2025, [12]),
+    "top10-q3-2025": (2025, [7, 8, 9]),
+    "top10-q4-2025": (2025, [10, 11, 12]),
+    "top10-h2-2025": (2025, [7, 8, 9, 10, 11, 12]),
+    # 2026
     "top10-jan2026": (2026, [1]),
     "top10-feb2026": (2026, [2]),
     "top10-mar2026": (2026, [3]),
-    "top10-apr2026-full": (2026, [4]),     # полный апрель (30 дней) — замена старого top10-apr2026
+    "top10-apr2026-full": (2026, [4]),
     "top10-may2026": (2026, [5]),
     "top10-jun2026": (2026, [6]),
     "top10-q1-2026": (2026, [1, 2, 3]),

@@ -115,10 +115,15 @@ def cmd_fetch(args):
     planned = eis_history.plan_batches(regions, pairs, dates, fz=args.fz)
     print(f"[plan] pending/error в очереди: {planned}")
 
-    if not args.phase2_only:
+    if args.phase1_only:
         eis_pipeline.run_phase1(workers=args.workers_phase1)
-    if not args.phase1_only:
+    elif args.phase2_only:
         eis_pipeline.run_phase2(workers=args.workers_phase2)
+    else:
+        eis_pipeline.run_interleaved(
+            workers_phase1=args.workers_phase1,
+            workers_phase2=args.workers_phase2,
+        )
 
     s = eis_history.stats()
     print("\n=== eis_history.db ===")
