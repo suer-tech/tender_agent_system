@@ -128,6 +128,40 @@ async def api_timeseries(from_date: str, to_date: str,
     return analytics.time_series_by_month(okpd2 or None, region or None, from_date, to_date)
 
 
+@app.get("/api/plans/years")
+async def api_plans_years():
+    """Список plan_year, по которым уже распарсены планы."""
+    return {"years": analytics.plans_available_years()}
+
+
+@app.get("/api/plans/overview")
+async def api_plans_overview(plan_year: int | None = None,
+                             okpd2: str = "", region: str = ""):
+    return analytics.plans_overview(plan_year, region or None, okpd2 or None)
+
+
+@app.get("/api/plans/top-sectors")
+async def api_plans_top_sectors(plan_year: int | None = None,
+                                region: str = "", limit: int = 30):
+    return analytics.plans_top_sectors(plan_year, region or None, limit)
+
+
+@app.get("/api/plans/top-customers")
+async def api_plans_top_customers(plan_year: int | None = None,
+                                  okpd2: str = "", region: str = "",
+                                  limit: int = 20):
+    return analytics.plans_top_customers(plan_year, region or None,
+                                          okpd2 or None, limit)
+
+
+@app.get("/api/plans/calendar")
+async def api_plans_calendar(plan_year: int | None = None,
+                             okpd2: str = "", region: str = "",
+                             top_sectors: int = 8):
+    return analytics.plans_calendar(plan_year, region or None,
+                                     okpd2 or None, top_sectors)
+
+
 @app.post("/api/classify-okpd2")
 async def api_classify_okpd2(payload: dict):
     title = (payload or {}).get("title", "")

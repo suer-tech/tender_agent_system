@@ -26,8 +26,31 @@ def conn():
         c.close()
 
 
+def _migrate_tender_plans(c: sqlite3.Connection):
+    """Добить недостающие колонки в существующую tender_plans (если БД создана
+    до раздела «Планы»). Безопасно для свежей БД — там CREATE TABLE сам
+    создаст всё, и эти ALTER просто пропустятся (колонки уже есть)."""
+    has_table = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tender_plans'"
+    ).fetchone()
+    if not has_table:
+        return
+    existing = {r[1] for r in c.execute("PRAGMA table_info(tender_plans)").fetchall()}
+    additions = [
+        ("version_number", "INTEGER"),
+        ("plan_year", "INTEGER"),
+        ("plan_period_first", "INTEGER"),
+        ("plan_period_second", "INTEGER"),
+        ("customer_kpp", "TEXT"),
+    ]
+    for col, typ in additions:
+        if col not in existing:
+            c.execute(f"ALTER TABLE tender_plans ADD COLUMN {col} {typ}")
+
+
 def init():
     with conn() as c:
+        _migrate_tender_plans(c)
         c.executescript(
             """
             -- ============ ИЗВЕЩЕНИЯ (PRIZ/epNotification*) ============
@@ -58,6 +81,23 @@ def init():
             CREATE INDEX IF NOT EXISTS idx_notices_customer ON notices(customer_inn);
             CREATE INDEX IF NOT EXISTS idx_notices_publish ON notices(publish_date);
             CREATE INDEX IF NOT EXISTS idx_notices_region ON notices(customer_region);
+
+            -- ИКЗ-коды извещения (n:1 на notice). Нужно для матчинга
+            -- извещений с позициями плана-графика: одна позиция плана → один ИКЗ;
+            -- одно извещение может покрывать несколько ИКЗ (мультилот).
+            -- Если ИКЗ позиции плана появился здесь — закупка уже запущена,
+            -- в «Календаре возможностей» её скрываем.
+            CREATE TABLE IF NOT EXISTS notice_ikz_codes (
+                reg_number TEXT NOT NULL,
+                ikz TEXT NOT NULL,
+                PRIMARY KEY (reg_number, ikz)
+            );
+            CREATE INDEX IF NOT EXISTS idx_notice_ikz ON notice_ikz_codes(ikz);
+            -- «Канонический» ИКЗ — без 27-29 (это «номер лота в извещении»;
+            -- в позиции плана он всегда 000, а в извещении становится реальным).
+            -- Матчинг план↔извещение должен идти по каноническому виду.
+            CREATE INDEX IF NOT EXISTS idx_notice_ikz_canon
+                ON notice_ikz_codes(SUBSTR(ikz,1,26) || SUBSTR(ikz,30));
 
             -- позиции извещения (объект закупки разбит по КТРУ/ОКПД2)
             CREATE TABLE IF NOT EXISTS notice_items (
@@ -217,10 +257,18 @@ def init():
             CREATE INDEX IF NOT EXISTS idx_unfair_founders_inn ON unfair_supplier_founders(founder_inn);
 
             -- ============ ПЛАНЫ-ГРАФИКИ (RPGZ/tenderPlan2020) ============
+            -- Заголовок плана: один заказчик публикует один план на год
+            -- (plan_year), который покрывает текущий + 2 следующих года
+            -- (plan_period_first, plan_period_second). Версия растёт при правках.
             CREATE TABLE IF NOT EXISTS tender_plans (
                 plan_number TEXT PRIMARY KEY,
+                version_number INTEGER,
+                plan_year INTEGER,
+                plan_period_first INTEGER,
+                plan_period_second INTEGER,
                 publish_date TEXT,
                 customer_inn TEXT,
+                customer_kpp TEXT,
                 customer_name TEXT,
                 customer_region TEXT,
                 total_amount REAL,
@@ -228,6 +276,45 @@ def init():
                 parsed_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_tender_plans_customer ON tender_plans(customer_inn);
+            CREATE INDEX IF NOT EXISTS idx_tender_plans_year ON tender_plans(plan_year);
+            CREATE INDEX IF NOT EXISTS idx_tender_plans_region ON tender_plans(customer_region);
+
+            -- Позиции плана: одна строка = одна запланированная закупка.
+            -- Гранулярность по времени — год (publishYear). Финансы:
+            -- total — суммарно по всем годам, currentYear — текущий plan_year.
+            CREATE TABLE IF NOT EXISTS tender_plan_positions (
+                position_number TEXT PRIMARY KEY,     -- positionNumber, уникален глобально
+                plan_number TEXT NOT NULL,            -- FK на tender_plans
+                ikz TEXT,                             -- идентификационный код закупки
+                purchase_number TEXT,                 -- порядковый внутри плана
+                publish_year INTEGER,                 -- ГОД, когда планируется выйти на торги
+                okpd2_code TEXT,
+                okpd2_name TEXT,
+                purchase_object TEXT,                 -- текстовое описание объекта
+                kvr_code TEXT,                        -- вид расходов бюджета (244, 247...)
+                position_canceled INTEGER DEFAULT 0,  -- 1 если позиция отменена
+                public_discussion INTEGER DEFAULT 0,
+                position_publish_date TEXT,
+                position_last_update TEXT,
+                amount_total REAL,                    -- финансы на все годы
+                amount_current_year REAL,             -- финансы на plan_year
+                amount_first_year REAL,
+                amount_second_year REAL,
+                customer_inn TEXT,                    -- денормализовано из плана для быстрых запросов
+                customer_region TEXT,
+                plan_year INTEGER,                    -- денормализовано из плана
+                source_archive TEXT,
+                parsed_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_plan_pos_plan ON tender_plan_positions(plan_number);
+            CREATE INDEX IF NOT EXISTS idx_plan_pos_okpd2 ON tender_plan_positions(okpd2_code);
+            CREATE INDEX IF NOT EXISTS idx_plan_pos_customer ON tender_plan_positions(customer_inn);
+            CREATE INDEX IF NOT EXISTS idx_plan_pos_year ON tender_plan_positions(publish_year);
+            CREATE INDEX IF NOT EXISTS idx_plan_pos_region ON tender_plan_positions(customer_region);
+            CREATE INDEX IF NOT EXISTS idx_plan_pos_active ON tender_plan_positions(position_canceled, publish_year);
+            -- См. notice_ikz_codes выше — единая «каноническая» форма для матчинга.
+            CREATE INDEX IF NOT EXISTS idx_plan_pos_ikz_canon
+                ON tender_plan_positions(SUBSTR(ikz,1,26) || SUBSTR(ikz,30));
 
             -- лог прогонов парсера
             CREATE TABLE IF NOT EXISTS parse_runs (
@@ -274,6 +361,7 @@ def stats() -> dict:
         s = {}
         for table in ["notices", "notice_items", "protocols", "contracts",
                        "contract_items", "complaints", "unilateral_refusals",
-                       "unfair_suppliers", "unfair_supplier_founders", "tender_plans"]:
+                       "unfair_suppliers", "unfair_supplier_founders",
+                       "tender_plans", "tender_plan_positions"]:
             s[table] = c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         return s

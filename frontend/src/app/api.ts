@@ -177,6 +177,28 @@ export interface TimeSeriesEntry {
 }
 
 
+// ============ ПЛАНЫ ЗАКУПОК ============
+
+export interface PlansOverview {
+  positions_count: number;
+  total_amount_current_year: number;
+  total_amount_all_years: number;
+  unique_customers: number;
+  unique_okpd2: number;
+  avg_position_amount: number | null;
+  launched_count: number;       // ИКЗ уже в извещениях
+  launched_sum: number;
+  upcoming_count: number;       // ещё впереди (= positions_count − launched)
+  upcoming_sum: number;
+}
+
+export interface PlansCalendar {
+  years: number[];
+  sectors: { prefix: string; name: string; total_sum: number }[];
+  cells: { year: number; prefix: string; positions: number; total_sum: number }[];
+}
+
+
 async function fetchJson<T>(url: string): Promise<T> {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url} → ${r.status}`);
@@ -221,6 +243,21 @@ export const api = {
 
   timeseries: (params: { from_date: string; to_date: string; okpd2?: string; region?: string }) =>
     fetchJson<TimeSeriesEntry[]>(`/api/market/timeseries${q(params)}`),
+
+  plansYears: () =>
+    fetchJson<{ years: number[] }>(`/api/plans/years`),
+
+  plansOverview: (params: { plan_year?: number; okpd2?: string; region?: string }) =>
+    fetchJson<PlansOverview>(`/api/plans/overview${q(params)}`),
+
+  plansTopSectors: (params: { plan_year?: number; region?: string; limit?: number }) =>
+    fetchJson<TopEntry[]>(`/api/plans/top-sectors${q(params)}`),
+
+  plansTopCustomers: (params: { plan_year?: number; okpd2?: string; region?: string; limit?: number }) =>
+    fetchJson<TopEntry[]>(`/api/plans/top-customers${q(params)}`),
+
+  plansCalendar: (params: { plan_year?: number; okpd2?: string; region?: string; top_sectors?: number }) =>
+    fetchJson<PlansCalendar>(`/api/plans/calendar${q(params)}`),
 
   classifyOkpd2: async (title: string, description = '') => {
     const r = await fetch('/api/classify-okpd2', {

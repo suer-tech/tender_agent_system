@@ -96,10 +96,12 @@ def _get_root_doc(xml_bytes: bytes) -> tuple[str, Any] | None:
 
 # ============ ПАРСЕРЫ ============
 
-def parse_notice(doc, region_hint: str | None = None) -> tuple[dict, list[dict]]:
+def parse_notice(doc, region_hint: str | None = None) -> tuple[dict, list[dict], list[str]]:
     """Извещения: epNotificationEF2020 / EOK2020 / EZK2020 / EZT2020.
 
-    Returns: (notice_row, [notice_items])
+    Returns: (notice_row, [notice_items], [ikz_codes])
+    Третий элемент — список 36-значных ИКЗ из всех IKZInfo/purchaseCode.
+    Используется для матчинга «план-позиция → извещение запущено».
     """
     doc_type = _local(doc)
     common = _find_direct(doc, "commonInfo")
@@ -172,7 +174,20 @@ def parse_notice(doc, region_hint: str | None = None) -> tuple[dict, list[dict]]
             "okei_code": _text_direct(okei, "code") if okei is not None else None,
         })
 
-    return notice, items
+    # ИКЗ — собираем все уникальные purchaseCode внутри IKZInfo.
+    # Один IKZInfo может встречаться несколько раз (мультилот) и/или
+    # дублироваться в разных секциях документа.
+    ikz_codes: list[str] = []
+    seen: set[str] = set()
+    for el in doc.iter():
+        if _local(el) != "IKZInfo":
+            continue
+        code = _text_direct(el, "purchaseCode")
+        if code and code not in seen:
+            seen.add(code)
+            ikz_codes.append(code)
+
+    return notice, items, ikz_codes
 
 
 def parse_protocol_final(doc, region_hint: str | None = None) -> dict:
@@ -484,27 +499,84 @@ def parse_unfair_supplier(doc, region_hint: str | None = None) -> tuple[dict, li
     return row, founders
 
 
-def parse_tender_plan(doc, region_hint: str | None = None) -> dict:
-    """RPGZ/tenderPlan2020 — для MVP берём только метаданные, без позиций."""
+def parse_tender_plan(doc, region_hint: str | None = None) -> tuple[dict, list[dict]]:
+    """RPGZ/tenderPlan2020. Возвращает (plan, [positions]).
+
+    План = шапка + список позиций. Каждая позиция — одна планируемая закупка
+    с ОКПД2, бюджетом и годом выхода на торги (publishYear). Время — годовая
+    гранулярность; точной даты в плане нет, есть только год.
+    """
+    plan_number = _text_any(doc, "planNumber")
+    version_number = _int(_text_any(doc, "versionNumber"))
+
     common = _find_direct(doc, "commonInfo")
-    customer = _find_direct(doc, "customer") or _find_any(doc, "customer")
+    plan_year = _int(_text_direct(common, "planYear")) if common is not None else None
+    plan_period = _find_direct(common, "planPeriod") if common is not None else None
+    plan_first = _int(_text_direct(plan_period, "firstYear")) if plan_period is not None else None
+    plan_second = _int(_text_direct(plan_period, "secondYear")) if plan_period is not None else None
+    publish_date = _text_direct(common, "publishDate") if common is not None else None
 
-    total_amount = None
-    # totalAmount или totalPublicAmount — варьируется
-    for name in ("totalAmount", "totalPublicAmount", "totalVolume"):
-        v = _float(_text_any(doc, name))
-        if v is not None:
-            total_amount = v
-            break
+    customer = _find_direct(common, "customerInfo") if common is not None else None
+    customer_inn = _text_direct(customer, "INN") if customer is not None else None
+    customer_kpp = _text_direct(customer, "KPP") if customer is not None else None
+    customer_name = _text_direct(customer, "fullName") if customer is not None else None
 
-    return {
-        "plan_number": _text_any(common, "plan2020Number") if common is not None else _text_any(doc, "plan2020Number"),
-        "publish_date": _text_any(common, "publishDate") if common is not None else _text_any(doc, "publishDate"),
-        "customer_inn": _text_direct(customer, "INN") if customer is not None else None,
-        "customer_name": _text_direct(customer, "fullName") if customer is not None else None,
+    # Сумма по плану — берём из totalsInfo/total если есть, иначе сумма по позициям ниже.
+    totals_info = _find_direct(doc, "totalsInfo")
+    total_amount = _float(_text_direct(totals_info, "total")) if totals_info is not None else None
+
+    plan = {
+        "plan_number": plan_number,
+        "version_number": version_number,
+        "plan_year": plan_year,
+        "plan_period_first": plan_first,
+        "plan_period_second": plan_second,
+        "publish_date": publish_date,
+        "customer_inn": customer_inn,
+        "customer_kpp": customer_kpp,
+        "customer_name": customer_name,
         "customer_region": region_hint,
         "total_amount": total_amount,
     }
+
+    positions: list[dict] = []
+    positions_root = _find_direct(doc, "positions")
+    if positions_root is not None:
+        for pos in positions_root:
+            if _local(pos) != "position":
+                continue
+            ci = _find_direct(pos, "commonInfo")
+            if ci is None:
+                continue
+            okpd2_info = _find_direct(ci, "OKPD2Info")
+            kvr_info = _find_direct(ci, "KVRInfo")
+            kvr = _find_direct(kvr_info, "KVR") if kvr_info is not None else None
+            fin = _find_direct(pos, "financeInfo")
+
+            positions.append({
+                "position_number": _text_direct(ci, "positionNumber"),
+                "plan_number": plan_number,
+                "ikz": _text_direct(ci, "IKZ"),
+                "purchase_number": _text_direct(ci, "purchaseNumber"),
+                "publish_year": _int(_text_direct(ci, "publishYear")),
+                "okpd2_code": _text_direct(okpd2_info, "OKPDCode") if okpd2_info is not None else None,
+                "okpd2_name": _text_direct(okpd2_info, "OKPDName") if okpd2_info is not None else None,
+                "purchase_object": _text_direct(ci, "purchaseObjectInfo"),
+                "kvr_code": _text_direct(kvr, "code") if kvr is not None else None,
+                "position_canceled": 1 if _text_direct(ci, "positionCanceled") == "true" else 0,
+                "public_discussion": 1 if _text_direct(ci, "publicDiscussion") == "true" else 0,
+                "position_publish_date": _text_direct(ci, "publishDate"),
+                "position_last_update": _text_direct(ci, "lastUpdateDate"),
+                "amount_total": _float(_text_direct(fin, "total")) if fin is not None else None,
+                "amount_current_year": _float(_text_direct(fin, "currentYear")) if fin is not None else None,
+                "amount_first_year": _float(_text_direct(fin, "firstYear")) if fin is not None else None,
+                "amount_second_year": _float(_text_direct(fin, "secondYear")) if fin is not None else None,
+                "customer_inn": customer_inn,
+                "customer_region": region_hint,
+                "plan_year": plan_year,
+            })
+
+    return plan, positions
 
 
 # ============ ДИСПЕТЧЕР ============

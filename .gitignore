@@ -20,6 +20,7 @@ archives/
 data/
 diag/
 fetch.log
+fetch-*.log
 
 # frontend build artefacts (исходник в frontend/src, собирается через frontend/build.sh)
 frontend/node_modules/

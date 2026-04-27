@@ -8,12 +8,14 @@ import {
   api, REGIONS, OKPD2_TOP,
   MarketOverview, TopEntry, TopItemEntry, TimeSeriesEntry,
 } from '../api';
-import { ArrowLeft, TrendingDown, Building2, Factory, BarChart3, Search, PiggyBank } from 'lucide-react';
+import { ArrowLeft, TrendingDown, Building2, Factory, BarChart3, Search, PiggyBank, Telescope } from 'lucide-react';
 import { useAppState } from '../store';
 import { SectorsCard } from '../components/SectorsCard';
 import { SectorItemsCard } from '../components/SectorItemsCard';
 import { CustomerCard } from '../components/CustomerCard';
 import { SupplierCard } from '../components/SupplierCard';
+import { ModeSwitcher, AnalyticsMode } from '../components/ModeSwitcher';
+import { PlansView } from '../components/PlansView';
 import {
   TopProgressBar, Refreshing, AnalyticsLoader, SkeletonOverlayLoader,
   StatTilesSkeleton, LineChartSkeleton, DiscountsCardSkeleton,
@@ -51,6 +53,15 @@ const selectStyle: React.CSSProperties = {
 
 export const MarketPage: React.FC = () => {
   const { isSearching, statusText } = useAppState();
+
+  // Режим аналитики: «что было» (история контрактов) ↔ «что будет» (планы).
+  // ОКПД2 и регион переходят между режимами — это и есть «двойная оптика»
+  // на одни и те же сущности. Дата/горизонт у каждого режима свои.
+  const [mode, setMode] = useState<AnalyticsMode>(() => {
+    if (typeof window === 'undefined') return 'history';
+    return (localStorage.getItem('analyticsMode') as AnalyticsMode) || 'history';
+  });
+  useEffect(() => { localStorage.setItem('analyticsMode', mode); }, [mode]);
 
   const [okpd2, setOkpd2] = useState('');
   const [region, setRegion] = useState('');
@@ -204,10 +215,15 @@ export const MarketPage: React.FC = () => {
     }
   }, [okpd2, region, fromDate, toDate]);
 
-  useEffect(() => { load(); }, [load]);
+  // В режиме «Планы» данные о контрактах не нужны — пропускаем загрузку.
+  useEffect(() => { if (mode === 'history') load(); }, [load, mode]);
 
+  const isPlans = mode === 'plans';
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div className={`min-h-screen transition-colors duration-500
+                     ${isPlans
+                       ? 'bg-gradient-to-b from-sky-50/60 via-slate-50 to-slate-50 dark:from-sky-950/20 dark:via-slate-950 dark:to-slate-950'
+                       : 'bg-slate-50 dark:bg-slate-950'}`}>
       <div className="max-w-7xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -218,7 +234,10 @@ export const MarketPage: React.FC = () => {
             </Link>
             <div className="border-l border-slate-300 dark:border-slate-700 h-6 mx-2" />
             <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-              <BarChart3 className="w-6 h-6 text-indigo-500" /> Аналитика рынка 44-ФЗ
+              {isPlans
+                ? <Telescope className="w-6 h-6 text-sky-500" />
+                : <BarChart3 className="w-6 h-6 text-indigo-500" />}
+              Аналитика рынка 44-ФЗ
             </h1>
           </div>
           <div className="flex items-center gap-3">
@@ -231,22 +250,24 @@ export const MarketPage: React.FC = () => {
           </div>
         </div>
 
-        <TopProgressBar visible={anyLoading} />
+        <TopProgressBar visible={anyLoading && !isPlans} />
         <AnalyticsLoader
-          visible={isFirstLoad && anyLoading}
+          visible={isFirstLoad && anyLoading && !isPlans}
           done={doneSections}
           total={totalSections}
         />
 
-        {/* Filters */}
+        {/* Mode switcher — «двойная оптика»: один набор сущностей, два режима зрения. */}
+        <ModeSwitcher mode={mode} onChange={setMode} />
+
+        {/* Общие фильтры (ОКПД2 + регион) — переходят между режимами. Даты —
+            только для истории; для планов используется свой селектор горизонта внутри PlansView. */}
         <div className="mb-6 p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className={`grid grid-cols-1 gap-3 ${isPlans ? 'md:grid-cols-2' : 'md:grid-cols-4'}`}>
             <div>
               <label className="block text-xs font-semibold text-slate-500 mb-1">Отрасль (ОКПД2)</label>
               <select value={okpd2} onChange={e => setOkpd2(e.target.value)} className={selectCls} style={selectStyle}>
                 {OKPD2_TOP.map(o => <option key={o.code} value={o.code}>{o.name}</option>)}
-                {/* Если выбранный префикс пришёл с клика по бару и его нет в OKPD2_TOP — дописываем,
-                    иначе селектор рассинхронизируется с реальным фильтром. */}
                 {okpd2 && !OKPD2_TOP.some(o => o.code === okpd2) && (
                   <option value={okpd2}>
                     {okpd2}{sectorNameOf(sectors, okpd2) ? ` — ${sectorNameOf(sectors, okpd2)}` : ''}
@@ -260,17 +281,34 @@ export const MarketPage: React.FC = () => {
                 {REGIONS.map(r => <option key={r.code} value={r.code}>{r.name}</option>)}
               </select>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">С даты</label>
-              <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">По дату</label>
-              <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm" />
-            </div>
+            {!isPlans && (
+              <>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">С даты</label>
+                  <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">По дату</label>
+                  <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm" />
+                </div>
+              </>
+            )}
           </div>
         </div>
 
+        {/* В режиме «Планы» — отдельный контент. Drill-down карточки заказчика
+            ниже общие — и в режиме истории, и в планах работают на одних и тех же
+            окнах period (CustomerCard сейчас умеет только историю; план-контекст
+            добавим в drill-down позже). */}
+        {isPlans ? (
+          <PlansView
+            okpd2={okpd2}
+            region={region}
+            onSelectOkpd2={setOkpd2}
+            onOpenCustomer={openCustomer}
+          />
+        ) : (
+        <>
         {/* Overview stats */}
         {overview ? (
           <Refreshing loading={load_overview}>
@@ -380,10 +418,11 @@ export const MarketPage: React.FC = () => {
             </Refreshing>
           )}
         </div>
+        </>
+        )}
 
-        {/* Карточки drill-down. Заказчик и поставщик могут быть открыты
-            одновременно — это удобно для перекрёстного анализа связок.
-            Каждая управляется независимо: свой Esc/X, свой scrollIntoView. */}
+        {/* Карточки drill-down. Открываются и в режиме истории, и в режиме планов
+            (в планах — заказчик кликается из топ-таблицы внутри PlansView). */}
         {selectedCustomerInn && (
           <div ref={customerCardRef} className="mt-6">
             <CustomerCard

@@ -45,7 +45,8 @@ def _walk_archives(doc_types: set[str]) -> list[tuple[Path, str, str]]:
     return out
 
 
-def _upsert_notice(con: sqlite3.Connection, notice: dict, items: list[dict], src: str):
+def _upsert_notice(con: sqlite3.Connection, notice: dict, items: list[dict],
+                   ikz_codes: list[str], src: str):
     cols = list(notice.keys())
     notice["source_archive"] = src
     cols.append("source_archive")
@@ -54,19 +55,27 @@ def _upsert_notice(con: sqlite3.Connection, notice: dict, items: list[dict], src
         f"INSERT OR REPLACE INTO notices ({','.join(cols)}) VALUES ({placeholders})",
         [notice[k] for k in cols],
     )
-    if not notice.get("reg_number"):
+    reg = notice.get("reg_number")
+    if not reg:
         return
-    con.execute("DELETE FROM notice_items WHERE reg_number=?", (notice["reg_number"],))
+    con.execute("DELETE FROM notice_items WHERE reg_number=?", (reg,))
     for it in items:
-        it["reg_number"] = notice["reg_number"]
+        it["reg_number"] = reg
         con.execute(
             """INSERT OR REPLACE INTO notice_items
                (reg_number, index_num, okpd2_code, okpd2_name, ktru_code, ktru_name,
                 name, price, quantity, okei_code)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (it["reg_number"], it["index_num"], it["okpd2_code"], it["okpd2_name"],
+            (reg, it["index_num"], it["okpd2_code"], it["okpd2_name"],
              it["ktru_code"], it["ktru_name"], it["name"], it["price"],
              it["quantity"], it["okei_code"]),
+        )
+    # ИКЗ — отдельная таблица, обновляем атомарно.
+    con.execute("DELETE FROM notice_ikz_codes WHERE reg_number=?", (reg,))
+    for code in ikz_codes:
+        con.execute(
+            "INSERT OR IGNORE INTO notice_ikz_codes (reg_number, ikz) VALUES (?, ?)",
+            (reg, code),
         )
 
 
@@ -148,14 +157,30 @@ def _upsert_unfair(con: sqlite3.Connection, row: dict, founders: list[dict], src
         )
 
 
-def _upsert_plan(con: sqlite3.Connection, row: dict, src: str):
-    row["source_archive"] = src
-    cols = list(row.keys())
+def _upsert_plan(con: sqlite3.Connection, plan: dict, positions: list[dict], src: str):
+    plan["source_archive"] = src
+    cols = list(plan.keys())
     ph = ",".join("?" * len(cols))
     con.execute(
         f"INSERT OR REPLACE INTO tender_plans ({','.join(cols)}) VALUES ({ph})",
-        [row[k] for k in cols],
+        [plan[k] for k in cols],
     )
+    if not plan.get("plan_number"):
+        return
+    # Перетираем все позиции этого плана (новая версия плана может удалить часть)
+    con.execute("DELETE FROM tender_plan_positions WHERE plan_number=?", (plan["plan_number"],))
+    if not positions:
+        return
+    pos_cols = list(positions[0].keys()) + ["source_archive"]
+    pos_ph = ",".join("?" * len(pos_cols))
+    for p in positions:
+        if not p.get("position_number"):
+            continue
+        p["source_archive"] = src
+        con.execute(
+            f"INSERT OR REPLACE INTO tender_plan_positions ({','.join(pos_cols)}) VALUES ({pos_ph})",
+            [p[k] for k in pos_cols],
+        )
 
 
 def run_parse(types: set[str] | None = None, limit: int | None = None) -> dict:
@@ -221,7 +246,7 @@ def run_parse(types: set[str] | None = None, limit: int | None = None) -> dict:
                             elif cat == "unfair":
                                 _upsert_unfair(con, *data, src)
                             elif cat == "plan":
-                                _upsert_plan(con, data, src)
+                                _upsert_plan(con, *data, src)
                             stats[cat] += 1
                         except sqlite3.Error as e:
                             stats["errors"] += 1
