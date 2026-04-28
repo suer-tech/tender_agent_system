@@ -189,7 +189,8 @@ def main():
 
     pf = sub.add_parser("fetch", help="Массовая выгрузка по пресету (резюмируемая)")
     pf.add_argument("--preset", required=True,
-                    help="top10-jan2026 | top10-feb2026 | top10-mar2026 | "
+                    help="top10-jan2025 | top10-h1-2025 | "
+                         "top10-jan2026 | top10-feb2026 | top10-mar2026 | "
                          "top10-apr2026-full | top10-may2026 | top10-jun2026 | "
                          "top10-q1-2026 | top10-q2-2026 | top10-h1-2026 | "
                          "top10-apr2026 (legacy 1-20 apr) | smoke")
