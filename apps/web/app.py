@@ -4,7 +4,14 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+import builtins
 from pathlib import Path
+
+# Принудительный сброс буфера для вывода логов моментально
+_orig_print = builtins.print
+def print(*args, **kwargs):
+    _orig_print(*args, flush=True, **kwargs)
+
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
@@ -259,36 +266,64 @@ async def _run_search(session_id: str, session: Session, agent: ChatAgent,
         kws = params.get("keywords", [])
         mode = params.get("search_mode", "all")
         platforms = "все площадки (госзакупки + Bicotender)" if mode == "all" else "Bicotender"
+        
+        print(f"[app] === СТАРТ ПОИСКА ТЕНДЕРОВ ({session_id}) ===")
+        print(f"[app] Ключевые слова: {', '.join(kws)}")
+        print(f"[app] Режим поиска: {platforms}")
+        
         await send_status(f"Семантическая карта: {', '.join(kws)}\nПлощадки: {platforms}")
 
+        print(f"[app] Шаг 1/4: Запуск поиска (execute_search)...")
         raw_tenders = await loop.run_in_executor(
             None, lambda: agent.execute_search(params, progress_callback=None)
         )
+        print(f"[app] Шаг 1/4 завершен. Найдено тендеров: {len(raw_tenders)}")
         await send_status(f"Найдено {len(raw_tenders)} тендеров. Читаю карточки и документы...")
 
+        print(f"[app] Шаг 2/4: Запуск обогащения данных (enrich_tenders)...")
         enriched = await loop.run_in_executor(None, agent.enrich_tenders, raw_tenders)
+        print(f"[app] Шаг 2/4 завершен. Обогащено тендеров: {len(enriched)}")
         await send_status(f"Анализирую {len(enriched)} тендеров через ИИ...")
 
+        print(f"[app] Шаг 3/4: Запуск ИИ-анализа (analyze_tenders)...")
         analyzed = await loop.run_in_executor(None, agent.analyze_tenders, enriched, user_msg)
+        print(f"[app] Шаг 3/4 завершен. Анализ завершен.")
 
+        print(f"[app] Форматирование карточек тендеров...")
         tender_cards = _format_tenders(analyzed)
+        print(f"[app] Карточек сформировано: {len(tender_cards) if tender_cards else 0}")
         if tender_cards:
             try:
-                await websocket.send_json({"type": "tenders", "data": tender_cards})
-            except Exception:
-                pass
-            # persist: тендеры — в сессию
-            chat_store.upsert_session(session_id, tenders=tender_cards)
+                print(f"[app] Отправка карточек клиенту через WebSocket...")
+                await asyncio.wait_for(
+                    websocket.send_json({"type": "tenders", "data": tender_cards}),
+                    timeout=10
+                )
+                print(f"[app] Карточки отправлены клиенту.")
+            except Exception as ws_err:
+                print(f"[app] WebSocket send ошибка (не критично): {ws_err}")
+            try:
+                print(f"[app] Сохранение тендеров в БД...")
+                chat_store.upsert_session(session_id, tenders=tender_cards)
+                print(f"[app] Тендеры сохранены в БД.")
+            except Exception as db_err:
+                print(f"[app] Ошибка записи в БД (не критично): {db_err}")
 
+        print(f"[app] Шаг 4/4: Генерация итогового отчета (generate_summary)...")
         await send_status("Готовлю итоговый отчёт...")
         summary = await loop.run_in_executor(None, agent.generate_summary, analyzed, user_msg)
+        print(f"[app] Шаг 4/4 завершен. Отчет успешно сформирован.")
+        
         await send_message("assistant", summary)
         await send_status("")
+        print(f"[app] === ПОИСК ДЛЯ СЕССИИ {session_id} УСПЕШНО ЗАВЕРШЕН ===")
     except asyncio.CancelledError:
         # поиск отменён (например, пользователь удалил сессию или начал новый)
+        print(f"[app] Поиск для сессии {session_id} был ОТМЕНЕН.")
         await send_status("")
         raise
     except Exception as e:
+        print(f"[app] КРИТИЧЕСКАЯ ОШИБКА в процессе поиска ({session_id}): {e}")
         await send_status("")
         await send_message("assistant", f"Произошла ошибка в процессе поиска: {e}")
     finally:
@@ -380,11 +415,13 @@ async def ws_chat(websocket: WebSocket, session_id: str):
 # ============ Форматирование карточек тендеров ============
 
 def _format_tenders(analyzed: list[dict]) -> list[dict]:
-    """Форматирует тендеры для фронта + обогащает аналитикой из eis_analytics."""
+    """Форматирует тендеры для фронта."""
     cards = []
-    for t in analyzed:
+    for i, t in enumerate(analyzed):
+        tid = t.get("external_id", i)
         analysis = t.get("analysis", {})
         if analysis.get("error"):
+            print(f"[format] #{tid}: пропущен (ошибка анализа)")
             continue
         base = {
             "id": t.get("external_id", ""),
@@ -409,11 +446,13 @@ def _format_tenders(analyzed: list[dict]) -> list[dict]:
             "doc_status": t.get("_doc_diag", ""),
             "doc_count": len(t.get("doc_files", [])),
             "description": analysis.get("summary", "") or t.get("description", ""),
+            "okpd2_guess": None,
+            "price_context": None,
+            "customer_risk": None,
         }
-        try:
-            base = enrich_tender_card(base)
-        except Exception as e:
-            print(f"[enrich] fail for {base.get('id')}: {e}")
         cards.append(base)
+        print(f"[format] #{tid}: OK (score={analysis.get('score', 0)})")
     cards.sort(key=lambda c: c.get("score", 0), reverse=True)
+    print(f"[format] Итого карточек: {len(cards)}")
     return cards
+

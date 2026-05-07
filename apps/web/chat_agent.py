@@ -18,8 +18,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import sys
+import builtins
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+
+# Принудительный сброс буфера для вывода логов моментально
+_orig_print = builtins.print
+def print(*args, **kwargs):
+    _orig_print(*args, flush=True, **kwargs)
+
 
 from core.sources import bicotender
 from core.agents.bicotender_agent import parse_document
@@ -507,8 +514,12 @@ class ChatAgent:
         return enriched
 
     def analyze_tenders(self, tenders: list[dict], user_query: str) -> list[dict]:
-        """Анализирует каждый тендер через Claude."""
-        for i, t in enumerate(tenders):
+        """Анализирует каждый тендер через Claude параллельно."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _analyze_single(item_tuple):
+            idx, t = item_tuple
+            print(f"[chat_agent] Начало ИИ-анализа #{t.get('external_id', idx)}")
             # Собираем тексты документов + диагностику
             doc_texts: list[str] = []
             doc_errors: list[str] = []
@@ -558,8 +569,20 @@ class ChatAgent:
                 documents_text=documents_text[:6000],
             )
 
-            analysis = _call_claude_json(prompt, timeout=120)
+            try:
+                analysis = _call_claude_json(prompt, timeout=120)
+            except Exception as e:
+                print(f"[chat_agent] Ошибка ИИ-анализа #{t.get('external_id', idx)}: {e}")
+                analysis = {"error": str(e), "score": 0}
+
             t["analysis"] = analysis or {"error": "no_response", "score": 0}
+            print(f"[chat_agent] Завершен ИИ-анализ #{t.get('external_id', idx)} (score: {t['analysis'].get('score', 0)})")
+            return t
+
+        # Запускаем в 10 параллельных потоков
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(_analyze_single, enumerate(tenders)))
+
         return tenders
 
     def generate_summary(self, tenders: list[dict], user_query: str) -> str:

@@ -185,6 +185,12 @@ def _build_okpd2_guess(title: str, description: str,
     }
 
 
+import builtins
+_orig_print = builtins.print
+def print(*args, **kwargs):
+    _orig_print(*args, flush=True, **kwargs)
+
+
 # --------------- главный entry-point ---------------
 
 def enrich_tender_card(tender: dict) -> dict:
@@ -192,6 +198,7 @@ def enrich_tender_card(tender: dict) -> dict:
 
     Ничего не ломает: если данные не нашли — блок = None.
     """
+    tid = tender.get("id", tender.get("reestr_number", "?"))
     reg_number = (tender.get("reestr_number") or tender.get("external_id") or "").strip()
     title = tender.get("title", "")
     description = tender.get("description", "") or tender.get("summary", "")
@@ -199,17 +206,36 @@ def enrich_tender_card(tender: dict) -> dict:
     region = tender.get("region_code", "")  # если есть
 
     # 1. Пытаемся найти в витрине
-    notice = _find_in_notices(reg_number)
+    print(f"[enrich:{tid}] 1/5 _find_in_notices('{reg_number[:20]}')...")
+    try:
+        notice = _find_in_notices(reg_number)
+        print(f"[enrich:{tid}] 1/5 done: {'найден' if notice else 'не найден'}")
+    except Exception as e:
+        print(f"[enrich:{tid}] 1/5 ОШИБКА: {e}")
+        notice = None
+
     if notice:
         if not region and notice.get("customer_region"):
             region = notice["customer_region"]
         customer_inn = notice.get("customer_inn")
     else:
-        customer_inn = _find_customer_inn_by_name(customer_name)
+        print(f"[enrich:{tid}] 2/5 _find_customer_inn_by_name('{customer_name[:30]}')...")
+        try:
+            customer_inn = _find_customer_inn_by_name(customer_name)
+            print(f"[enrich:{tid}] 2/5 done: inn={'найден' if customer_inn else 'не найден'}")
+        except Exception as e:
+            print(f"[enrich:{tid}] 2/5 ОШИБКА: {e}")
+            customer_inn = None
 
-    # 2. ОКПД2 — точный или guessed (0.6+ confidence для classified — иначе
-    # показываем кандидат в UI, но bench не считаем).
-    okpd2_guess = _build_okpd2_guess(title, description, notice)
+    # 2. ОКПД2
+    print(f"[enrich:{tid}] 3/5 _build_okpd2_guess...")
+    try:
+        okpd2_guess = _build_okpd2_guess(title, description, notice)
+        print(f"[enrich:{tid}] 3/5 done: {okpd2_guess.get('code') if okpd2_guess else 'None'}")
+    except Exception as e:
+        print(f"[enrich:{tid}] 3/5 ОШИБКА: {e}")
+        okpd2_guess = None
+
     okpd2_code = None
     if okpd2_guess:
         is_exact = okpd2_guess["source"] == "exact"
@@ -218,13 +244,29 @@ def enrich_tender_card(tender: dict) -> dict:
             if parts:
                 okpd2_code = parts[0][:2]
 
-    # 3. Bench и risk
-    price_context = _build_price_context(okpd2_code, region)
-    customer_risk = _build_customer_risk(customer_inn)
+    # 3. Bench
+    print(f"[enrich:{tid}] 4/5 _build_price_context(okpd2={okpd2_code}, region={region})...")
+    try:
+        price_context = _build_price_context(okpd2_code, region)
+        print(f"[enrich:{tid}] 4/5 done: {'есть данные' if price_context else 'None'}")
+    except Exception as e:
+        print(f"[enrich:{tid}] 4/5 ОШИБКА: {e}")
+        price_context = None
 
+    # 4. Risk
+    print(f"[enrich:{tid}] 5/5 _build_customer_risk(inn={customer_inn})...")
+    try:
+        customer_risk = _build_customer_risk(customer_inn)
+        print(f"[enrich:{tid}] 5/5 done: {'есть данные' if customer_risk else 'None'}")
+    except Exception as e:
+        print(f"[enrich:{tid}] 5/5 ОШИБКА: {e}")
+        customer_risk = None
+
+    print(f"[enrich:{tid}] ВСЕ ШАГИ ЗАВЕРШЕНЫ")
     return {
         **tender,
         "okpd2_guess": okpd2_guess,
         "price_context": price_context,
         "customer_risk": customer_risk,
     }
+

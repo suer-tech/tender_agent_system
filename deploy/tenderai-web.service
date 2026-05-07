@@ -5,10 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/root/tender
-EnvironmentFile=/root/tender/.env
-ExecStart=/root/tender/.venv/bin/python -m uvicorn apps.web.app:app \
+User=user1
+WorkingDirectory=/home/user1/tender_agent_system
+EnvironmentFile=/home/user1/tender_agent_system/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/user1/tender_agent_system/.venv/bin/python -m uvicorn apps.web.app:app \
     --host 127.0.0.1 --port 8765 \
     --workers 2 --proxy-headers --forwarded-allow-ips='*'
 Restart=on-failure
