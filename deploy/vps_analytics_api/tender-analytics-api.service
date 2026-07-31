@@ -6,14 +6,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=user1
-WorkingDirectory=/home/user1/tender_agent_system
-EnvironmentFile=/home/user1/tender_agent_system/.env
+WorkingDirectory=/home/user1/tender_analytics_api
+EnvironmentFile=/home/user1/tender_analytics_api/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/user1/tender_agent_system/.venv/bin/python -m uvicorn apps.web.app:app --host 127.0.0.1 --port 8770 --workers 1 --proxy-headers --forwarded-allow-ips='*'
+ExecStart=/home/user1/tender_analytics_api/.venv/bin/python -m uvicorn apps.web.app:app --host 127.0.0.1 --port 8770 --workers 1 --proxy-headers --forwarded-allow-ips='*'
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:/home/user1/tender_agent_system/tenderai-api.log
-StandardError=append:/home/user1/tender_agent_system/tenderai-api.log
+StandardOutput=append:/home/user1/tender_analytics_api/tenderai-api.log
+StandardError=append:/home/user1/tender_analytics_api/tenderai-api.log
 
 [Install]
 WantedBy=multi-user.target
