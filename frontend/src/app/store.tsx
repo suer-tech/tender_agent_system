@@ -71,7 +71,13 @@ function loadActiveId(sessions: ChatSession[]): string {
   return sessions[0].id;
 }
 
-const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+const CHAT_API_BASE = (import.meta.env.VITE_CHAT_API_URL || window.location.origin).replace(/\/+$/, '');
+const CHAT_WS_BASE = CHAT_API_BASE.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+const WS_URL = `${CHAT_WS_BASE}/ws`;
+
+function chatUrl(path: string): string {
+  return `${CHAT_API_BASE}${path}`;
+}
 
 
 // ============ Notifications ============
@@ -139,7 +145,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/sessions');
+        const r = await fetch(chatUrl('/api/sessions'));
         if (!r.ok) return;
         const serverSessions: any[] = await r.json();
         if (!Array.isArray(serverSessions) || serverSessions.length === 0) return;
@@ -158,7 +164,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         const activeId = sessionIdRef.current;
         if (summaries.some(s => s.id === activeId)) {
           try {
-            const r2 = await fetch(`/api/sessions/${activeId}`);
+            const r2 = await fetch(chatUrl(`/api/sessions/${activeId}`));
             if (r2.ok) {
               const full = await r2.json();
               const msgs: Message[] = (full.messages || []).map((m: any) => ({
@@ -357,7 +363,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setStatusText('');
     // Подтянуть полный контент с сервера (если был переход на не-активную сессию)
     try {
-      const r = await fetch(`/api/sessions/${id}`);
+      const r = await fetch(chatUrl(`/api/sessions/${id}`));
       if (r.ok) {
         const full = await r.json();
         const msgs: Message[] = (full.messages || []).map((m: any) => ({
@@ -378,7 +384,7 @@ export const AppStateProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const deleteSession = useCallback((id: string) => {
     // Удаляем на сервере (fire-and-forget)
-    fetch(`/api/sessions/${id}`, { method: 'DELETE' }).catch(() => {});
+    fetch(chatUrl(`/api/sessions/${id}`), { method: 'DELETE' }).catch(() => {});
 
     setSessions(prev => {
       const filtered = prev.filter(s => s.id !== id);

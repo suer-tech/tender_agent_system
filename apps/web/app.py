@@ -5,6 +5,7 @@ import asyncio
 import json
 import uuid
 import builtins
+import os
 from pathlib import Path
 
 # Принудительный сброс буфера для вывода логов моментально
@@ -14,6 +15,7 @@ def print(*args, **kwargs):
 
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -28,6 +30,15 @@ from core.storage import chat as chat_store
 
 app = FastAPI(title="TenderAI")
 chat_store.init()
+
+chat_origins = [origin.strip() for origin in os.getenv("CHAT_CORS_ORIGINS", "*").split(",") if origin.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=chat_origins,
+    allow_credentials=chat_origins != ["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 STATIC = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
@@ -218,7 +229,7 @@ async def spa_fallback(path: str):
 def _gen_title(session: Session, session_id: str, user_msg: str,
                websocket: WebSocket, loop):
     """Короткое название для сессии через LLM. Пишет в БД + шлёт клиенту."""
-    from core import llm
+    from core.llm import search as llm
 
     def _do():
         prompt = (
