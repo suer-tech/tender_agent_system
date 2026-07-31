@@ -199,7 +199,7 @@ export interface PlansCalendar {
 }
 
 
-const ANALYTICS_API_BASE = (import.meta.env.VITE_ANALYTICS_API_URL || '').replace(/\/+$/, '');
+const ANALYTICS_API_BASE = (import.meta.env.VITE_ANALYTICS_API_URL || 'https://api.aixmode.online').replace(/\/+$/, '');
 
 function analyticsUrl(path: string): string {
   return `${ANALYTICS_API_BASE}${path}`;

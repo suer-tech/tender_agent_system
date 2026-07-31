@@ -71,7 +71,8 @@ function loadActiveId(sessions: ChatSession[]): string {
   return sessions[0].id;
 }
 
-const CHAT_API_BASE = (import.meta.env.VITE_CHAT_API_URL || window.location.origin).replace(/\/+$/, '');
+const DEFAULT_API_BASE = 'https://api.aixmode.online';
+const CHAT_API_BASE = (import.meta.env.VITE_CHAT_API_URL || DEFAULT_API_BASE).replace(/\/+$/, '');
 const CHAT_WS_BASE = CHAT_API_BASE.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
 const WS_URL = `${CHAT_WS_BASE}/ws`;
 
