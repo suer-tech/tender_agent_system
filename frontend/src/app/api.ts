@@ -199,10 +199,20 @@ export interface PlansCalendar {
 }
 
 
+const ANALYTICS_API_BASE = (import.meta.env.VITE_ANALYTICS_API_URL || '').replace(/\/+$/, '');
+
+function analyticsUrl(path: string): string {
+  return `${ANALYTICS_API_BASE}${path}`;
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url} → ${r.status}`);
   return r.json() as Promise<T>;
+}
+
+async function fetchAnalyticsJson<T>(path: string): Promise<T> {
+  return fetchJson<T>(analyticsUrl(path));
 }
 
 function q(params: Record<string, any>): string {
@@ -218,46 +228,46 @@ export const api = {
     fetchJson<RiskData>(`/api/risk${q({ inn })}`),
 
   marketOverview: (params: { from_date: string; to_date: string; okpd2?: string; region?: string }) =>
-    fetchJson<MarketOverview>(`/api/market/overview${q(params)}`),
+    fetchAnalyticsJson<MarketOverview>(`/api/market/overview${q(params)}`),
 
   topSectors: (params: { from_date: string; to_date: string; region?: string; limit?: number }) =>
-    fetchJson<TopEntry[]>(`/api/market/top-sectors${q(params)}`),
+    fetchAnalyticsJson<TopEntry[]>(`/api/market/top-sectors${q(params)}`),
 
   topItemsInSector: (params: { from_date: string; to_date: string; okpd2: string; region?: string; limit?: number }) =>
-    fetchJson<TopItemEntry[]>(`/api/market/top-items-in-sector${q(params)}`),
+    fetchAnalyticsJson<TopItemEntry[]>(`/api/market/top-items-in-sector${q(params)}`),
 
   itemDetails: (params: { from_date: string; to_date: string; okpd2_code: string; region?: string; contracts_limit?: number; contracts_offset?: number; sort_by?: 'date' | 'price'; sort_dir?: 'asc' | 'desc' }) =>
-    fetchJson<ItemDetails>(`/api/market/item-details${q(params)}`),
+    fetchAnalyticsJson<ItemDetails>(`/api/market/item-details${q(params)}`),
 
   customerDetails: (params: { from_date: string; to_date: string; inn: string; contracts_limit?: number; contracts_offset?: number; sort_by?: 'date' | 'price'; sort_dir?: 'asc' | 'desc' }) =>
-    fetchJson<CustomerDetails>(`/api/market/customer-details${q(params)}`),
+    fetchAnalyticsJson<CustomerDetails>(`/api/market/customer-details${q(params)}`),
 
   supplierDetails: (params: { from_date: string; to_date: string; inn: string; contracts_limit?: number; contracts_offset?: number; sort_by?: 'date' | 'price'; sort_dir?: 'asc' | 'desc' }) =>
-    fetchJson<SupplierDetails>(`/api/market/supplier-details${q(params)}`),
+    fetchAnalyticsJson<SupplierDetails>(`/api/market/supplier-details${q(params)}`),
 
   topCustomers: (params: { from_date: string; to_date: string; okpd2?: string; region?: string; limit?: number }) =>
-    fetchJson<TopEntry[]>(`/api/market/top-customers${q(params)}`),
+    fetchAnalyticsJson<TopEntry[]>(`/api/market/top-customers${q(params)}`),
 
   topSuppliers: (params: { from_date: string; to_date: string; okpd2?: string; region?: string; limit?: number }) =>
-    fetchJson<TopEntry[]>(`/api/market/top-suppliers${q(params)}`),
+    fetchAnalyticsJson<TopEntry[]>(`/api/market/top-suppliers${q(params)}`),
 
   timeseries: (params: { from_date: string; to_date: string; okpd2?: string; region?: string }) =>
-    fetchJson<TimeSeriesEntry[]>(`/api/market/timeseries${q(params)}`),
+    fetchAnalyticsJson<TimeSeriesEntry[]>(`/api/market/timeseries${q(params)}`),
 
   plansYears: () =>
-    fetchJson<{ years: number[] }>(`/api/plans/years`),
+    fetchAnalyticsJson<{ years: number[] }>(`/api/plans/years`),
 
   plansOverview: (params: { plan_year?: number; okpd2?: string; region?: string }) =>
-    fetchJson<PlansOverview>(`/api/plans/overview${q(params)}`),
+    fetchAnalyticsJson<PlansOverview>(`/api/plans/overview${q(params)}`),
 
   plansTopSectors: (params: { plan_year?: number; region?: string; limit?: number }) =>
-    fetchJson<TopEntry[]>(`/api/plans/top-sectors${q(params)}`),
+    fetchAnalyticsJson<TopEntry[]>(`/api/plans/top-sectors${q(params)}`),
 
   plansTopCustomers: (params: { plan_year?: number; okpd2?: string; region?: string; limit?: number }) =>
-    fetchJson<TopEntry[]>(`/api/plans/top-customers${q(params)}`),
+    fetchAnalyticsJson<TopEntry[]>(`/api/plans/top-customers${q(params)}`),
 
   plansCalendar: (params: { plan_year?: number; okpd2?: string; region?: string; top_sectors?: number }) =>
-    fetchJson<PlansCalendar>(`/api/plans/calendar${q(params)}`),
+    fetchAnalyticsJson<PlansCalendar>(`/api/plans/calendar${q(params)}`),
 
   classifyOkpd2: async (title: string, description = '') => {
     const r = await fetch('/api/classify-okpd2', {
