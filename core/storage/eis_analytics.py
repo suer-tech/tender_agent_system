@@ -6,11 +6,12 @@
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent.parent / "eis_analytics.db"
+DB_PATH = Path(os.getenv("ANALYTICS_DB_PATH", Path(__file__).parent.parent.parent / "eis_analytics.db"))
 
 
 @contextmanager

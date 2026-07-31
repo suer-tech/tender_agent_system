@@ -325,8 +325,6 @@ class ChatAgent:
         - Если тендер найден и там, и там — оставляем версию с площадки-первоисточника
         - Bicotender добавляет только те, которых нет на других площадках
         """
-        from core.utils.vpn import vpn_on, vpn_off, vpn_status
-
         keywords = params.get("keywords", [])
         if not keywords:
             keywords = ["тендер"]
@@ -340,22 +338,18 @@ class ChatAgent:
         # --- 1. Российские площадки (VPN OFF) — приоритетный источник ---
         if search_mode == "all":
             print("[chat_agent] === Российские площадки (VPN OFF) ===")
-            vpn_off()
-            try:
-                from core.agents.multi_search import search_russian_platforms
-                seen_ru: set[str] = set()
-                for kw in keywords[:3]:
-                    try:
-                        items = search_russian_platforms(kw, limit=10)
-                        for r in items:
-                            eid = f"{r.get('source', '')}:{r.get('external_id', '')}"
-                            if eid not in seen_ru:
-                                seen_ru.add(eid)
-                                russian_results.append(r)
-                    except Exception as e:
-                        print(f"[chat_agent] russian search '{kw}': {e}")
-            finally:
-                vpn_on()
+            from core.agents.multi_search import search_russian_platforms
+            seen_ru: set[str] = set()
+            for kw in keywords[:3]:
+                try:
+                    items = search_russian_platforms(kw, limit=10)
+                    for r in items:
+                        eid = f"{r.get('source', '')}:{r.get('external_id', '')}"
+                        if eid not in seen_ru:
+                            seen_ru.add(eid)
+                            russian_results.append(r)
+                except Exception as e:
+                    print(f"[chat_agent] russian search '{kw}': {e}")
             print(f"[chat_agent] российские площадки: {len(russian_results)}")
 
         # --- 2. Bicotender (VPN ON) — дополнительный источник ---
@@ -411,9 +405,6 @@ class ChatAgent:
             return final
 
         # Убеждаемся что VPN включён для Claude
-        if not vpn_status()["connected"]:
-            vpn_on()
-
         # Быстрая фильтрация через Claude
         user_query = self.session.history[-1]["content"] if self.session.history else ""
         filtered = self._pre_filter(final, user_query)

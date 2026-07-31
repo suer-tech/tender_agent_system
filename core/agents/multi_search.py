@@ -16,7 +16,6 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.utils.vpn import vpn_on, vpn_off, vpn_status
 from core.sources import bicotender
 from core.sources.common import is_active
 
@@ -90,12 +89,9 @@ def search_all_platforms(
                 seen_titles.add(title_key)
             all_tenders.append(item)
 
-    initial_vpn = vpn_status()
-
     # --- Этап 1: Российские площадки (VPN OFF) ---
     if use_russian:
         print("\n[multi] === Российские площадки (VPN OFF) ===")
-        vpn_off()
 
         for kw in keywords[:3]:  # макс 3 ключевых слова для российских площадок
             try:
@@ -109,8 +105,6 @@ def search_all_platforms(
     # --- Этап 2: Bicotender (любой IP) ---
     if use_bicotender:
         print("\n[multi] === Bicotender ===")
-        # Bicotender работает с любого IP, но для надёжности включаем VPN
-        vpn_on()
 
         for kw in keywords[:4]:
             try:
@@ -122,8 +116,5 @@ def search_all_platforms(
         print(f"[multi] Всего после bicotender: {len(all_tenders)}")
 
     # --- Восстанавливаем VPN для Claude ---
-    if not vpn_status()["connected"]:
-        vpn_on()
-
     print(f"\n[multi] Итого уникальных тендеров: {len(all_tenders)}")
     return all_tenders
