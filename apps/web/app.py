@@ -229,7 +229,7 @@ async def spa_fallback(path: str):
 def _gen_title(session: Session, session_id: str, user_msg: str,
                websocket: WebSocket, loop):
     """Короткое название для сессии через LLM. Пишет в БД + шлёт клиенту."""
-    from core import llm
+    from core.llm import search as llm
 
     def _do():
         prompt = (

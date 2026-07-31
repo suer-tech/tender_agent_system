@@ -277,7 +277,7 @@ class ChatAgent:
         он идёт в фоне». Не инициирует новый поиск, отвечает коротко по теме
         (статус, вопросы о тендерах, болтовня).
         """
-        from core import llm as _llm
+        from core.llm import search as _llm
 
         last_search = self.session.search_params or {}
         kws = last_search.get("keywords", [])
@@ -300,7 +300,11 @@ class ChatAgent:
             f"Ответь пользователю кратко."
         )
 
-        raw = _llm.call_text(prompt, timeout=30, max_tokens=300)
+        try:
+            raw = _llm.call_text(prompt, timeout=30, max_tokens=300)
+        except _llm.SearchLLMError as exc:
+            print(f"[chat_agent] dedicated search LLM failed: {exc}")
+            raw = None
         if not raw:
             return {"text": "Подождите, поиск ещё идёт. Результаты появятся через минуту."}
         return {"text": raw.strip()}
@@ -627,10 +631,18 @@ def _normalize_title(title: str) -> str:
 
 
 def _call_claude(prompt: str, timeout: int = 120) -> str | None:
-    from core import llm
-    return llm.call_text(prompt, timeout=timeout)
+    from core.llm import search
+    try:
+        return search.call_text(prompt, timeout=timeout)
+    except search.SearchLLMError as exc:
+        print(f"[chat_agent] dedicated search LLM failed: {exc}")
+        return None
 
 
 def _call_claude_json(prompt: str, timeout: int = 120) -> dict | None:
-    from core import llm
-    return llm.call_json(prompt, timeout=timeout)
+    from core.llm import search
+    try:
+        return search.call_json(prompt, timeout=timeout)
+    except search.SearchLLMError as exc:
+        print(f"[chat_agent] dedicated search LLM failed: {exc}")
+        return None
